@@ -34,8 +34,9 @@ def parse_taf(taf_text: str) -> TAF:
     lines = [line.strip() for line in taf_text.strip().split('\n') if line.strip()]
     tokens = []
     for line in lines:
-        # 移除 TAF 开头标记
-        line = re.sub(r'^TAF\s+', '', line, flags=re.IGNORECASE)
+        # 移除 TAF 开头标记（包括 TAF AMD 修订报、TAF COR 更正报）
+        # 根据《民用航空气象报文规范》附录二 2.1
+        line = re.sub(r'^TAF\s+(AMD\s+|COR\s+)?', '', line, flags=re.IGNORECASE)
         tokens.extend(line.split())
 
     if not tokens:

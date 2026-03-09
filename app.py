@@ -178,34 +178,102 @@ if taf_text.strip():
         # 显示时间线
         if show_timeline:
             st.divider()
-            st.subheader("📈 天气时间线")
+            st.subheader("📈 每小时天气趋势")
 
-            # 创建时间线数据
+            # 创建每小时时间线数据
             timeline_data = []
             current_time = taf.valid_from
             while current_time <= taf.valid_to:
                 weather = get_weather_at_time(taf, current_time)
-                status = "☀️" if weather.cavok else "🌤️"
+
+                # 状态图标和文字描述
+                status_icon = "☀️" if weather.cavok else "🌤️"
+                status_text = "CAVOK" if weather.cavok else "一般"
                 if weather.weather:
                     if "TS" in str(weather.weather):
-                        status = "⛈️"
+                        status_icon = "⛈️"
+                        status_text = "雷暴"
                     elif "RA" in str(weather.weather):
-                        status = "🌧️"
+                        status_icon = "🌧️"
+                        status_text = "降雨"
                     elif "SN" in str(weather.weather):
-                        status = "🌨️"
+                        status_icon = "🌨️"
+                        status_text = "降雪"
                     elif "BR" in str(weather.weather) or "FG" in str(weather.weather):
-                        status = "🌫️"
+                        status_icon = "🌫️"
+                        status_text = "雾/轻雾"
+                    elif "SA" in str(weather.weather) or "SS" in str(weather.weather) or "DS" in str(weather.weather):
+                        status_icon = "🌪️"
+                        status_text = "沙尘"
+                    elif "HZ" in str(weather.weather):
+                        status_icon = "🌫️"
+                        status_text = "霾"
 
                 vis_text = "CAVOK" if weather.cavok else f"{weather.visibility}m"
                 weather_cn = [weather_code_to_cn(w) for w in weather.weather]
 
+                # 显示风力信息
+                wind_info = "-"
+                if weather.wind:
+                    if weather.wind.variable:
+                        wind_info = "VRB"
+                    else:
+                        wind_info = f"{weather.wind.direction}°/{weather.wind.speed}m/s"
+                    if weather.wind.gust:
+                        wind_info += f"(G{weather.wind.gust})"
+
+                # 显示云层信息
+                cloud_info = "-"
+                if weather.clouds:
+                    cloud_info = " | ".join([
+                        f"{cloud_amount_to_cn(c.amount)} {c.height}ft"
+                        for c in weather.clouds
+                    ])
+
+                # 检查当前时间生效的变化组
+                tempo_time = "-"
+                tempo_vis = "-"
+                tempo_wx = "-"
+                becmg_status = "-"
+                fm_status = "-"
+
+                for change in taf.changes:
+                    if not change.from_time or not change.to_time:
+                        continue
+
+                    # TEMPO: 在时段内生效
+                    if 'TEMPO' in change.type:
+                        if change.from_time <= current_time < change.to_time:
+                            tempo_time = f"{change.from_time.strftime('%H:%M')}-{change.to_time.strftime('%H:%M')}"
+                            tempo_vis = f"{change.weather.visibility}m" if change.weather.visibility else "-"
+                            tempo_wx = " | ".join([weather_code_to_cn(w) for w in change.weather.weather]) if change.weather.weather else "-"
+
+                    # BECMG: 在 to_time 后完全生效
+                    elif change.type == 'BECMG':
+                        if change.from_time <= current_time < change.to_time:
+                            becmg_status = "变化中"
+                        elif current_time == change.to_time:
+                            becmg_status = "已完成"
+
+                    # FM: 从 from_time 起生效
+                    elif change.type.startswith('FM'):
+                        if current_time >= change.from_time:
+                            fm_status = f"生效"
+
                 timeline_data.append({
-                    "时间": current_time.strftime("%H:%M"),
-                    "状态": status,
+                    "时间": current_time.strftime("%m-%d %H:%M"),
+                    "状态": f"{status_icon} {status_text}",
+                    "风": wind_info,
                     "能见度": vis_text,
                     "天气": " | ".join(weather_cn) if weather_cn else "-",
+                    "云": cloud_info,
+                    "TEMPO 时段": tempo_time,
+                    "TEMPO 能见度": tempo_vis,
+                    "TEMPO 天气": tempo_wx,
+                    "BECMG": becmg_status,
+                    "FM": fm_status,
                 })
-                current_time += timedelta(hours=2)
+                current_time += timedelta(hours=1)
 
             st.table(timeline_data)
 
