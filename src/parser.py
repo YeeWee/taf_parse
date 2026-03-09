@@ -106,7 +106,7 @@ def parse_issue_time(time_str: str) -> datetime:
     """解析发布时间，格式 DDHHMMZ"""
     if not time_str.endswith('Z'):
         raise TAFParseError(f"发布时间格式错误，应以 Z 结尾: {time_str}")
-    return parse_ddhhmm(time_str[:-1])
+    return parse_ddhhmm(time_str[:-1], datetime.utcnow())
 
 
 def parse_validity(validity_str: str, base_date: datetime) -> Tuple[datetime, datetime]:

@@ -120,6 +120,14 @@ with st.sidebar:
     show_raw = st.checkbox("显示原始解析数据", value=False)
     show_timeline = st.checkbox("显示时间线", value=True)
 
+    st.header("🌍 时区设置")
+    st.info("TAF 报文使用协调世界时 (UTC)")
+    timezone_choice = st.selectbox(
+        "时间显示",
+        ["仅 UTC", "UTC + 北京时间 (UTC+8)", "仅北京时间"],
+        index=0,
+    )
+
 
 # 主界面
 # 先显示 TAF 输入区域
@@ -212,6 +220,17 @@ if taf_text.strip():
                 vis_text = "CAVOK" if weather.cavok else f"{weather.visibility}m"
                 weather_cn = [weather_code_to_cn(w) for w in weather.weather]
 
+                # 处理时区显示
+                utc_str = current_time.strftime("%H:%M")
+                local_str = (current_time + timedelta(hours=8)).strftime("%m-%d %H:%M")
+
+                if timezone_choice == "仅 UTC":
+                    time_display = f"{current_time.strftime('%m-%d %H:%M')} UTC"
+                elif timezone_choice == "仅北京时间":
+                    time_display = f"{local_str} 北京"
+                else:  # UTC + 北京时间
+                    time_display = f"{utc_str} UTC / {local_str} 北京"
+
                 # 显示风力信息
                 wind_info = "-"
                 if weather.wind:
@@ -261,7 +280,7 @@ if taf_text.strip():
                             fm_status = f"生效"
 
                 timeline_data.append({
-                    "时间": current_time.strftime("%m-%d %H:%M"),
+                    "时间": time_display,
                     "状态": f"{status_icon} {status_text}",
                     "风": wind_info,
                     "能见度": vis_text,
@@ -279,7 +298,15 @@ if taf_text.strip():
 
         # 显示查询时间的天气
         st.divider()
-        st.subheader(f"🌍 {query_time.strftime('%Y-%m-%d %H:%M')} 的天气")
+        # 查询时间显示（带时区）
+        if timezone_choice == "仅 UTC":
+            query_time_str = f"{query_time.strftime('%Y-%m-%d %H:%M')} UTC"
+        elif timezone_choice == "仅北京时间":
+            query_time_str = f"{(query_time + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')} 北京"
+        else:  # UTC + 北京时间
+            query_time_str = f"{query_time.strftime('%H:%M')} UTC / {(query_time + timedelta(hours=8)).strftime('%m-%d %H:%M')} 北京"
+
+        st.subheader(f"🌍 {query_time_str} 的天气")
 
         weather = get_weather_at_time(taf, query_time)
         display_weather(weather)

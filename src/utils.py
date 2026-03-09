@@ -12,7 +12,7 @@ def parse_ddhhmm(ddhhmm_str: str, base_date: Optional[datetime] = None) -> datet
 
     Args:
         ddhhmm_str: "DDHHMM" 格式字符串，HH 可以是 00-24
-        base_date: 基准日期，用于推算月份和年份
+        base_date: 基准日期，用于推算月份和年份。如果为 None，使用当前日期
 
     Returns:
         datetime 对象
@@ -29,11 +29,13 @@ def parse_ddhhmm(ddhhmm_str: str, base_date: Optional[datetime] = None) -> datet
         hour = 0
         day += 1
 
-    # 处理跨月情况
+    # 处理跨月情况：根据基准日期确定月份
     result = base_date.replace(day=day, hour=hour, minute=minute, second=0, microsecond=0)
 
-    # 如果日号小于当前日，认为是下个月
-    if day < base_date.day:
+    # 如果日号小于基准日号，且相差较大，可能是下个月
+    # 例如：基准日期是 31 日，解析 01 日，应该是下月 1 日
+    if day < base_date.day and base_date.day - day >= 25:
+        # 日号差值大，认为是下个月
         if result.month == 12:
             result = result.replace(year=result.year + 1, month=1)
         else:
