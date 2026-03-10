@@ -55,7 +55,7 @@ def parse_taf(taf_text: str) -> TAF:
 
     # 验证 ICAO 代码
     if len(icao) != 4 or not icao.isalpha():
-        raise TAFParseError(f"无效的 ICAO 代码: {icao}")
+        raise TAFParseError(f"无效的 ICAO 代码：{icao}")
 
     # 解析发布时间
     issue_time = parse_issue_time(issue_time_str)
@@ -77,7 +77,16 @@ def parse_taf(taf_text: str) -> TAF:
             break
 
         # 检查是否是变化组开始
+        # 注意：FM 可能带时间（如 FM090600），需要特殊处理
+        change_type = token
         if token in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER'):
+            pass  # 标准格式
+        elif token.startswith('FM') and len(token) > 2 and token[2:].isdigit():
+            change_type = 'FM'  # FMDDHHMM 格式
+        else:
+            change_type = None
+
+        if change_type in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER'):
             change_group, remaining = parse_change_group(
                 token, current_token_iter, issue_time, valid_from, valid_to
             )
@@ -103,9 +112,14 @@ def parse_taf(taf_text: str) -> TAF:
 
 
 def parse_issue_time(time_str: str) -> datetime:
-    """解析发布时间，格式 DDHHMMZ"""
+    """
+    解析发布时间，格式 DDHHMMZ
+
+    根据 TAF 规范，发布日期只有日、时、分，没有月份和年份。
+    月份和年份根据当前日期推断。
+    """
     if not time_str.endswith('Z'):
-        raise TAFParseError(f"发布时间格式错误，应以 Z 结尾: {time_str}")
+        raise TAFParseError(f"发布时间格式错误，应以 Z 结尾：{time_str}")
     return parse_ddhhmm(time_str[:-1], datetime.utcnow())
 
 
@@ -114,7 +128,7 @@ def parse_validity(validity_str: str, base_date: datetime) -> Tuple[datetime, da
     try:
         return parse_ddhhddhh(validity_str, base_date)
     except Exception as e:
-        raise TAFParseError(f"无效的有效期格式: {validity_str}") from e
+        raise TAFParseError(f"无效的有效期格式：{validity_str}") from e
 
 
 def parse_weather_state(
@@ -126,7 +140,7 @@ def parse_weather_state(
     解析天气状态
 
     Returns:
-        (WeatherState, 剩余的tokens)
+        (WeatherState, 剩余的 tokens)
     """
     weather = WeatherState()
     remaining = []
@@ -139,7 +153,20 @@ def parse_weather_state(
         # 检查是否遇到变化组开始标记
         if token in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER', 'TX', 'TN'):
             remaining.append(token)
-            # 收集剩余所有token
+            # 收集剩余所有 token
+            remaining.extend(list(token_iter))
+            break
+
+        # 检查是否是 FM 开头带时间的标记（如 FM090600）
+        if token.startswith('FM') and len(token) > 2 and token[2:].isdigit():
+            remaining.append(token)
+            # 收集剩余所有 token
+            remaining.extend(list(token_iter))
+            break
+
+        # 检查是否遇到备注标记，跳过后续内容
+        if token in ('RMK', 'NXT', 'FCST', 'BY'):
+            # 跳过备注部分
             remaining.extend(list(token_iter))
             break
 
@@ -155,14 +182,9 @@ def parse_weather_state(
                 weather.cavok = True
                 weather.visibility = 10000
             else:
-                weather.visibility = int(token)
-            visibility_parsed = True
-            continue
-
-        # CAVOK 也需要单独处理
-        if token == 'CAVOK':
-            weather.cavok = True
-            weather.visibility = 10000
+                vis = parse_visibility(token)
+                if vis is not None:
+                    weather.visibility = vis
             visibility_parsed = True
             continue
 
@@ -188,7 +210,7 @@ def parse_weather_state(
             weather.clouds = []
             continue
 
-        # 未知token，可能是变化组的一部分，保存起来
+        # 未知 token，可能是变化组的一部分，保存起来
         remaining.append(token)
 
     return weather, remaining
@@ -196,7 +218,7 @@ def parse_weather_state(
 
 def is_wind_token(token: str) -> bool:
     """判断是否是风组"""
-    # 格式: dddffMPS, dddffGffMPS, VRBffMPS, 或 KT 结尾
+    # 格式：dddffMPS, dddffGffMPS, VRBffMPS, 或 KT 结尾
     if token.endswith(('MPS', 'KT')):
         return True
     # 也可能单独出现风向风速
@@ -230,7 +252,7 @@ def parse_wind(token: str) -> Optional[Wind]:
         wind.variable = True
         speed_str = token[3:]
     else:
-        # 前3位是风向，后2位是风速
+        # 前 3 位是风向，后 2 位是风速
         if len(token) >= 5:
             dir_str = token[:3]
             speed_str = token[3:]
@@ -248,33 +270,106 @@ def parse_wind(token: str) -> Optional[Wind]:
 
 
 def is_visibility_token(token: str) -> bool:
-    """判断是否是能见度或CAVOK"""
+    """判断是否是能见度或 CAVOK"""
     if token == 'CAVOK':
         return True
+    # 米制：纯数字，如 6000、1500
     if token.isdigit() and len(token) <= 4:
+        return True
+    # 英制：如 P6SM、5SM、1/2SM、3/4SM 等
+    if token.endswith('SM'):
         return True
     return False
 
 
+def parse_visibility(token: str) -> Optional[int]:
+    """
+    解析能见度，返回米
+
+    Args:
+        token: 能见度 token，如 '6000'、'P6SM'、'5SM'、'1/2SM'
+
+    Returns:
+        能见度（米）
+    """
+    if token == 'CAVOK':
+        return 10000
+
+    # 米制
+    if token.isdigit():
+        return int(token)
+
+    # 英制（以 SM 结尾）
+    if token.endswith('SM'):
+        value_str = token[:-2]
+
+        # P6SM = 大于 6 英里
+        if value_str.startswith('P'):
+            miles = float(value_str[1:])
+            return int(miles * 1609.34)  # 转换为米
+
+        # 分数形式：1/2SM、3/4SM
+        if '/' in value_str:
+            num, denom = value_str.split('/')
+            miles = float(num) / float(denom)
+            return int(miles * 1609.34)
+
+        # 整数或小数：5SM、2.5SM
+        miles = float(value_str)
+        return int(miles * 1609.34)
+
+    return None
+
+
 def is_weather_token(token: str) -> bool:
-    """判断是否是天气现象"""
-    # 天气现象通常是2-9个字符，由特定的代码组成
+    """
+    判断是否是天气现象
+
+    根据《民用航空气象报文规范》规定的天气现象代码
+    """
+    # 跳过备注标记和非法代码
+    if token in ('RMK', 'NXT', 'FCST', 'BY', 'AUTO', 'NCD'):
+        return False
+
+    # 天气现象代码（按文档分类）
     weather_prefixes = ('-', '+', 'VC', 'RE', 'MI', 'PR', 'BC', 'DR', 'BL', 'SH', 'TS', 'FZ')
-    weather_codes = ('DZ', 'RA', 'SN', 'SG', 'IC', 'PL', 'GR', 'GS', 'UP',
-                     'BR', 'FG', 'FU', 'VA', 'DU', 'SA', 'HZ',
-                     'PO', 'SQ', 'FC', 'SS', 'DS', 'NSW')
+    weather_codes = (
+        # 降水类
+        'DZ', 'RA', 'SN', 'SG', 'IC', 'PL', 'GR', 'GS', 'UP',
+        # 视程障碍现象类
+        'FG', 'BR', 'FU', 'VA', 'DU', 'SA', 'HZ',
+        # 其他类
+        'PO', 'SQ', 'FC', 'SS', 'DS',
+        # 无重要天气
+        'NSW'
+    )
 
     # 移除强度前缀
     test_token = token
     if test_token.startswith(('+', '-')):
         test_token = test_token[1:]
 
-    # 检查是否包含天气代码
-    for code in weather_codes:
-        if code in test_token:
-            return True
+    # 检查是否以天气代码开头（精确匹配）
     for prefix in weather_prefixes:
         if test_token.startswith(prefix):
+            # TS 需要特殊处理，避免匹配 FCST 等
+            if prefix == 'TS':
+                # TS 后面应该跟降水类型或单独出现
+                remaining = test_token[2:]
+                if remaining == '' or remaining in weather_codes:
+                    return True
+                # 检查是否是有效组合如 TSRA、TSSN 等
+                if remaining in ('RA', 'SN', 'GR', 'GS', 'PL', 'SG', 'DZ'):
+                    return True
+                return False
+            elif len(test_token) == len(prefix) or test_token[len(prefix):len(prefix)+2] in weather_codes:
+                return True
+            elif len(test_token) == len(prefix):
+                return True
+
+    # 检查是否包含完整天气代码
+    for code in weather_codes:
+        if test_token == code or (code in test_token and len(test_token) <= 6):
             return True
 
     return False
@@ -340,18 +435,26 @@ def parse_change_group(
 
     # 解析时间
     try:
-        time_token = next(token_iter)
-
-        if change_type.startswith('FM'):
-            # FMDDHHMM
-            from_time = parse_ddhhmm(time_token[2:] if time_token.startswith('FM') else time_token, base_date)
+        # 如果 first_token 是 FM 带时间（如 FM090600），直接解析
+        if first_token.startswith('FM') and len(first_token) > 2 and first_token[2:].isdigit():
+            # FMDDHHMM 格式
+            from_time = parse_ddhhmm(first_token[2:], base_date)
             to_time = valid_to
-        elif '/' in time_token:
-            # DDHH/DDHH
-            from_time, to_time = parse_ddhhddhh(time_token, base_date)
+            change_type = 'FM'  # 规范化为 FM
         else:
-            # 可能是 FM 格式，再试一次
-            remaining_tokens.append(time_token)
+            time_token = next(token_iter)
+
+            if time_token.startswith('FM') and len(time_token) > 2 and time_token[2:].isdigit():
+                # FMDDHHMM 格式
+                from_time = parse_ddhhmm(time_token[2:], base_date)
+                to_time = valid_to
+                change_type = 'FM'
+            elif '/' in time_token:
+                # DDHH/DDHH
+                from_time, to_time = parse_ddhhddhh(time_token, base_date)
+            else:
+                # 可能是 FM 格式，再试一次
+                remaining_tokens.append(time_token)
     except StopIteration:
         return None, remaining_tokens
 
@@ -478,4 +581,4 @@ def batch_parse(input_dir: str, output_dir: str) -> None:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(taf.model_dump(mode='json'), f, ensure_ascii=False, indent=2, default=str)
         except Exception as e:
-            print(f"解析 {file_path} 失败: {e}")
+            print(f"解析 {file_path} 失败：{e}")
