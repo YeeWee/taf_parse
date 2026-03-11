@@ -15,9 +15,66 @@ import streamlit as st
 src_path = str(Path(__file__).parent / "src")
 sys.path.insert(0, src_path)
 
-from parser import parse_taf, get_weather_at_time, TAFParseError
+from parser import parse_taf, get_weather_at_time, get_weather_display_at_time, TAFParseError
 from utils import weather_code_to_cn, cloud_amount_to_cn
-from models import WeatherState
+from models import WeatherState, TAFDisplay, ChangeGroup
+
+
+def get_becmg_status(changes: list, query_time: datetime) -> str:
+    """
+    获取 BECMG 状态
+
+    - 起始时间点显示"变化中"
+    - 结束时间点显示"完成"
+    - 中间时间点显示"变化中"
+    - 如果与 FM/TL/AT 组合，也仅显示"变化"
+    """
+    for change in changes:
+        # 检查 BECMG 类型（包括 BECMG、BECMG FM 等组合）
+        if change.type.startswith('BECMG'):
+            if not change.from_time or not change.to_time:
+                continue
+
+            # 检查是否在 BECMG 时间段内
+            if change.from_time <= query_time <= change.to_time:
+                # 检查是否同时有 FM/TL/AT 组合
+                has_fm_tl_at = ('FM' in change.type or 'TL' in change.type or 'AT' in change.type)
+
+                if query_time == change.from_time:
+                    return "变化" if has_fm_tl_at else "变化中"
+                elif query_time == change.to_time:
+                    return "完成"
+                else:
+                    return "变化中" if not has_fm_tl_at else "变化"
+
+    return "-"
+
+
+def get_fm_status(changes: list, query_time: datetime) -> str:
+    """
+    获取 FM 状态
+
+    - FM、TL、AT 所在的时间点显示"变化"
+    - 与 BECMG 组合时不显示（因为已在 BECMG 列显示"变化"）
+    """
+    for change in changes:
+        change_type = change.type
+
+        # 跳过与 BECMG 组合的情况（在 BECMG 列已处理）
+        if change_type.startswith('BECMG') and ('FM' in change_type or 'TL' in change_type or 'AT' in change_type):
+            continue
+
+        # 检查 FM 变化组（单独的 FM，不与 BECMG 组合）
+        if change_type == 'FM' or (change_type.startswith('FM') and not change_type.startswith('BECMG')):
+            if change.from_time and query_time == change.from_time:
+                return "变化"
+
+        # 检查 TL (TILL) 和 AT (AT TIME) 标记
+        if change_type in ('TL', 'AT'):
+            if change.from_time and query_time == change.from_time:
+                return "变化"
+
+    return "-"
 
 
 # 页面配置
@@ -192,12 +249,21 @@ if taf_text.strip():
             timeline_data = []
             current_time = taf.valid_from
             while current_time <= taf.valid_to:
-                weather = get_weather_at_time(taf, current_time)
+                weather_display = get_weather_display_at_time(taf, current_time)
+                weather = weather_display.main
 
                 # 状态图标和文字描述
                 status_icon = "☀️" if weather.cavok else "🌤️"
                 status_text = "CAVOK" if weather.cavok else "一般"
-                if weather.weather:
+                # 根据 TEMPO 天气更新状态
+                if weather_display.tempo:
+                    if "TS" in str(weather_display.tempo.weather):
+                        status_icon = "⛈️"
+                        status_text = "雷暴"
+                    elif "RA" in str(weather_display.tempo.weather):
+                        status_icon = "🌧️"
+                        status_text = "降雨"
+                elif weather.weather:
                     if "TS" in str(weather.weather):
                         status_icon = "⛈️"
                         status_text = "雷暴"
@@ -249,49 +315,97 @@ if taf_text.strip():
                         for c in weather.clouds
                     ])
 
-                # 检查当前时间生效的变化组
-                tempo_time = "-"
-                tempo_vis = "-"
-                tempo_wx = "-"
-                becmg_status = "-"
-                fm_status = "-"
+                # TEMPO 明细显示 - 拆分为独立列
+                tempo_rows = []
+                if weather_display.tempo_details:
+                    for detail in weather_display.tempo_details:
+                        # 能见度
+                        vis_str = f"{detail.visibility}m" if detail.visibility else "-"
+                        # 风
+                        if detail.wind_speed:
+                            if detail.wind_direction:
+                                wind_str = f"{detail.wind_direction}°/{detail.wind_speed}m/s"
+                            else:
+                                wind_str = f"{detail.wind_speed}m/s"
+                            if detail.wind_gust:
+                                wind_str += f"(G{detail.wind_gust})"
+                        else:
+                            wind_str = "-"
+                        # 云
+                        if detail.clouds:
+                            cloud_strs = []
+                            for c in detail.clouds:
+                                s = cloud_amount_to_cn(c['amount'])
+                                if c.get('height'):
+                                    s += f"({c['height']}ft)"
+                                if c.get('type'):
+                                    s += c['type']
+                                cloud_strs.append(s)
+                            cloud_str = " | ".join(cloud_strs)
+                        else:
+                            cloud_str = "-"
+                        # 天气现象
+                        wx_str = " | ".join([weather_code_to_cn(w) for w in detail.weather]) if detail.weather else "-"
 
-                for change in taf.changes:
-                    if not change.from_time or not change.to_time:
-                        continue
+                        tempo_rows.append({
+                            "time_range": detail.time_range,
+                            "visibility": vis_str,
+                            "wind": wind_str,
+                            "cloud": cloud_str,
+                            "weather": wx_str,
+                        })
 
-                    # TEMPO: 在时段内生效
-                    if 'TEMPO' in change.type:
-                        if change.from_time <= current_time < change.to_time:
-                            tempo_time = f"{change.from_time.strftime('%H:%M')}-{change.to_time.strftime('%H:%M')}"
-                            tempo_vis = f"{change.weather.visibility}m" if change.weather.visibility else "-"
-                            tempo_wx = " | ".join([weather_code_to_cn(w) for w in change.weather.weather]) if change.weather.weather else "-"
-
-                    # BECMG: 在 to_time 后完全生效
-                    elif change.type == 'BECMG':
-                        if change.from_time <= current_time < change.to_time:
-                            becmg_status = "变化中"
-                        elif current_time == change.to_time:
-                            becmg_status = "已完成"
-
-                    # FM: 从 from_time 起生效
-                    elif change.type.startswith('FM'):
-                        if current_time >= change.from_time:
-                            fm_status = f"生效"
-
-                timeline_data.append({
+                # 主行数据 - 主体天气（不包含 TEMPO 数据）
+                main_row = {
                     "时间": time_display,
                     "状态": f"{status_icon} {status_text}",
-                    "风": wind_info,
-                    "能见度": vis_text,
-                    "天气": " | ".join(weather_cn) if weather_cn else "-",
-                    "云": cloud_info,
-                    "TEMPO 时段": tempo_time,
-                    "TEMPO 能见度": tempo_vis,
-                    "TEMPO 天气": tempo_wx,
-                    "BECMG": becmg_status,
-                    "FM": fm_status,
-                })
+                    "主体 - 风": wind_info,
+                    "主体 - 能见度": vis_text,
+                    "主体 - 天气": " | ".join(weather_cn) if weather_cn else "-",
+                    "主体 - 云": cloud_info,
+                }
+
+                # TEMPO 列 - 只放 TEMPO 相关数据，多个 TEMPO 用换行分隔
+                if not tempo_rows:
+                    main_row["TEMPO 时段"] = "-"
+                    main_row["TEMPO 能见度"] = "-"
+                    main_row["TEMPO 风"] = "-"
+                    main_row["TEMPO 云"] = "-"
+                    main_row["TEMPO 天气"] = "-"
+                    main_row["TEMPO 最坏情况"] = "-"
+                else:
+                    # 收集所有 TEMPO 的值
+                    tempo_times = [row["time_range"] for row in tempo_rows]
+                    tempo_vis = [row["visibility"] for row in tempo_rows]
+                    tempo_wind = [row["wind"] for row in tempo_rows]
+                    tempo_cloud = [row["cloud"] for row in tempo_rows]
+                    tempo_weather_list = [row["weather"] for row in tempo_rows]
+
+                    # 多个 TEMPO 用换行分隔显示
+                    main_row["TEMPO 时段"] = "  \n".join(tempo_times)
+                    main_row["TEMPO 能见度"] = "  \n".join(tempo_vis)
+                    main_row["TEMPO 风"] = "  \n".join(tempo_wind)
+                    main_row["TEMPO 云"] = "  \n".join(tempo_cloud)
+                    main_row["TEMPO 天气"] = "  \n".join(tempo_weather_list)
+
+                    # TEMPO 最坏情况（多个 TEMPO 时）
+                    if weather_display.tempo and len(tempo_rows) > 1:
+                        worst_vis = f"{weather_display.tempo.visibility}m" if weather_display.tempo.visibility else "-"
+                        worst_wx = " | ".join([weather_code_to_cn(w) for w in weather_display.tempo.weather]) if weather_display.tempo.weather else "-"
+                        main_row["TEMPO 最坏情况"] = f"{worst_vis} {worst_wx}"
+                    else:
+                        main_row["TEMPO 最坏情况"] = "-"
+
+                # BECMG 列 - 检查是否有 BECMG 变化组
+                becmg_status = get_becmg_status(taf.changes, current_time)
+                main_row["BECMG"] = becmg_status
+
+                # FM 列 - 检查是否有 FM 变化组
+                fm_status = get_fm_status(taf.changes, current_time)
+                main_row["FM"] = fm_status
+
+                timeline_data.append(main_row)
+
                 current_time += timedelta(hours=1)
 
             st.table(timeline_data)
@@ -308,8 +422,60 @@ if taf_text.strip():
 
         st.subheader(f"🌍 {query_time_str} 的天气")
 
-        weather = get_weather_at_time(taf, query_time)
-        display_weather(weather)
+        # 获取分开的主体和 TEMPO 数据
+        weather_display = get_weather_display_at_time(taf, query_time)
+
+        # 显示主体天气
+        st.markdown("### 主体天气")
+        display_weather(weather_display.main)
+
+        # 如果有 TEMPO，分开显示
+        if weather_display.tempo_details:
+            st.divider()
+            st.markdown("### ⚠️ TEMPO 明细")
+
+            # 显示 TEMPO 明细表
+            tempo_header = ["时段", "能见度", "风", "云", "天气现象"]
+            tempo_rows = []
+            for detail in weather_display.tempo_details:
+                # 能见度
+                vis_str = f"{detail.visibility}m" if detail.visibility else "-"
+                # 风
+                if detail.wind_speed:
+                    if detail.wind_direction:
+                        wind_str = f"{detail.wind_direction}°/{detail.wind_speed}m/s"
+                    else:
+                        wind_str = f"{detail.wind_speed}m/s"
+                    if detail.wind_gust:
+                        wind_str += f"(G{detail.wind_gust})"
+                else:
+                    wind_str = "-"
+                # 云
+                if detail.clouds:
+                    cloud_strs = []
+                    for c in detail.clouds:
+                        s = cloud_amount_to_cn(c['amount'])
+                        if c.get('height'):
+                            s += f"({c['height']}ft)"
+                        if c.get('type'):
+                            s += c['type']
+                        cloud_strs.append(s)
+                    cloud_str = " | ".join(cloud_strs)
+                else:
+                    cloud_str = "-"
+                # 天气现象
+                wx_str = " | ".join([weather_code_to_cn(w) for w in detail.weather]) if detail.weather else "-"
+
+                tempo_rows.append([detail.time_range, vis_str, wind_str, cloud_str, wx_str])
+
+            st.table(dict(zip(tempo_header, zip(*tempo_rows))) if tempo_rows else {})
+
+            # 显示最坏情况
+            if weather_display.tempo:
+                st.markdown("#### 📉 TEMPO 最坏情况（汇总）")
+                st.info("以下显示多个 TEMPO 叠加后的最坏情况（能见度/云底高取最小，风取最大，天气取并集）")
+                display_weather(weather_display.tempo)
+
 
         # 显示原始数据
         if show_raw:

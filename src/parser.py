@@ -8,10 +8,10 @@ from typing import Optional, List, Iterator, Tuple
 from copy import deepcopy
 
 try:
-    from .models import TAF, WeatherState, ChangeGroup, Wind, Cloud
+    from .models import TAF, WeatherState, ChangeGroup, Wind, Cloud, TAFDisplay, TEMPODetail
     from .utils import parse_ddhhmm, parse_ddhhddhh
 except ImportError:
-    from models import TAF, WeatherState, ChangeGroup, Wind, Cloud
+    from models import TAF, WeatherState, ChangeGroup, Wind, Cloud, TAFDisplay, TEMPODetail
     from utils import parse_ddhhmm, parse_ddhhddhh
 
 
@@ -83,6 +83,8 @@ def parse_taf(taf_text: str) -> TAF:
             pass  # 标准格式
         elif token.startswith('FM') and len(token) > 2 and token[2:].isdigit():
             change_type = 'FM'  # FMDDHHMM 格式
+        elif token.startswith('PROB') and len(token) > 4 and token[4:].isdigit():
+            change_type = 'PROB'  # PROB30、PROB40 等格式
         else:
             change_type = None
 
@@ -152,6 +154,12 @@ def parse_weather_state(
     for token in token_iter:
         # 检查是否遇到变化组开始标记
         if token in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER', 'TX', 'TN'):
+            remaining.append(token)
+            # 收集剩余所有 token
+            remaining.extend(list(token_iter))
+            break
+        # 检查是否是 PROB 带概率（如 PROB30、PROB40）
+        if token.startswith('PROB') and len(token) > 4 and token[4:].isdigit():
             remaining.append(token)
             # 收集剩余所有 token
             remaining.extend(list(token_iter))
@@ -420,7 +428,12 @@ def parse_change_group(
     remaining_tokens = []
 
     # 处理 PROB
-    if change_type == 'PROB':
+    # 检查是否是 PROB30 这种格式（first_token 就是 PROB30）
+    if first_token.startswith('PROB') and len(first_token) > 4 and first_token[4:].isdigit():
+        probability = int(first_token[4:])
+        change_type = f'PROB{probability}'
+        # 继续解析时间和天气
+    elif change_type == 'PROB':
         try:
             prob_token = next(token_iter)
             probability = int(prob_token)
@@ -441,6 +454,38 @@ def parse_change_group(
             from_time = parse_ddhhmm(first_token[2:], base_date)
             to_time = valid_to
             change_type = 'FM'  # 规范化为 FM
+        elif first_token.startswith('PROB') and len(first_token) > 4 and first_token[4:].isdigit():
+            # PROB30 格式，时间下一个 token
+            time_token = next(token_iter)
+            if '/' in time_token:
+                from_time, to_time = parse_ddhhddhh(time_token, base_date)
+            else:
+                remaining_tokens.append(time_token)
+        elif first_token == 'BECMG':
+            # BECMG 可能和 FM/TL/AT 组合
+            time_token = next(token_iter)
+
+            if '/' in time_token:
+                # DDHH/DDHH - BECMG 标准格式
+                from_time, to_time = parse_ddhhddhh(time_token, base_date)
+
+                # 检查后面是否有 FM/TL/AT
+                try:
+                    next_tok = next(token_iter)
+                    if next_tok.startswith('FM') and len(next_tok) > 2 and next_tok[2:].isdigit():
+                        change_type = 'BECMG FM'
+                        from_time = parse_ddhhmm(next_tok[2:], base_date)
+                    elif next_tok.startswith('TL') and len(next_tok) > 2 and next_tok[2:].isdigit():
+                        change_type = 'BECMG TL'
+                        to_time = parse_ddhhmm(next_tok[2:], base_date)
+                    elif next_tok.startswith('AT') and len(next_tok) > 2 and next_tok[2:].isdigit():
+                        change_type = 'BECMG AT'
+                        from_time = parse_ddhhmm(next_tok[2:], base_date)
+                        to_time = from_time
+                    else:
+                        remaining_tokens.append(next_tok)
+                except StopIteration:
+                    pass
         else:
             time_token = next(token_iter)
 
@@ -475,14 +520,35 @@ def parse_change_group(
 
 def get_weather_at_time(taf: TAF, query_time: datetime) -> WeatherState:
     """
-    获取指定时间的天气状态
+    获取指定时间的天气状态（合并后的结果，兼容旧接口）
 
     Args:
         taf: 解析后的 TAF 对象
         query_time: 查询时间
 
     Returns:
-        该时间的天气状态
+        该时间的天气状态（如果 TEMPO 生效，返回合并后的天气）
+
+    Raises:
+        ValueError: 当查询时间不在 TAF 有效期内时
+    """
+    display = get_weather_display_at_time(taf, query_time)
+    # 兼容旧接口：如果有 TEMPO，返回合并后的数据
+    if display.tempo:
+        return _merge_weather(display.main, display.tempo)
+    return display.main
+
+
+def get_weather_display_at_time(taf: TAF, query_time: datetime) -> TAFDisplay:
+    """
+    获取指定时间的天气显示数据（主体和 TEMPO 分开）
+
+    Args:
+        taf: 解析后的 TAF 对象
+        query_time: 查询时间
+
+    Returns:
+        TAFDisplay 对象，包含主体天气、TEMPO 明细和最坏情况
 
     Raises:
         ValueError: 当查询时间不在 TAF 有效期内时
@@ -494,7 +560,7 @@ def get_weather_at_time(taf: TAF, query_time: datetime) -> WeatherState:
         )
 
     # 从初始天气开始
-    current_weather = deepcopy(taf.initial)
+    main_weather = deepcopy(taf.initial)
 
     # 先处理所有 FM 和 BECMG 组（永久性变化）
     for change in taf.changes:
@@ -504,26 +570,242 @@ def get_weather_at_time(taf: TAF, query_time: datetime) -> WeatherState:
         # FM: 从指定时间起永久改变
         if change.type.startswith('FM'):
             if query_time >= change.from_time:
-                current_weather = _merge_weather(current_weather, change.weather)
+                main_weather = _merge_weather(main_weather, change.weather)
 
         # BECMG: 在时间段内逐渐变化，查询时间在结束时间后完全生效
         elif change.type == 'BECMG':
             if query_time >= change.to_time:
-                current_weather = _merge_weather(current_weather, change.weather)
+                main_weather = _merge_weather(main_weather, change.weather)
 
-    # 再检查是否有 TEMPO 组在当前时间生效（暂时性变化）
+    # 收集当前时间生效的所有 TEMPO 组（包括 PROB）
+    active_tempo_groups = []
     for change in taf.changes:
         if not change.from_time or not change.to_time:
             continue
 
         # TEMPO/PROB: 只在时间段内暂时有效
-        if 'TEMPO' in change.type:
+        # PROB30、PROB40 等概率组也视为 TEMPO 类型
+        if 'TEMPO' in change.type or change.type.startswith('PROB'):
             if change.from_time <= query_time < change.to_time:
-                # 对于 TEMPO，返回合并后的天气
-                temp_weather = _merge_weather(current_weather, change.weather)
-                return temp_weather
+                active_tempo_groups.append(change)
 
-    return current_weather
+    # 生成 TEMPO 明细
+    tempo_details = []
+    for group in active_tempo_groups:
+        detail = TEMPODetail(
+            time_range=f"{group.from_time.strftime('%H:%M')}-{group.to_time.strftime('%H:%M')}",
+            visibility=group.weather.visibility,
+            weather=group.weather.weather.copy() if group.weather.weather else [],
+            wind_direction=group.weather.wind.direction if group.weather.wind else None,
+            wind_speed=group.weather.wind.speed if group.weather.wind else None,
+            wind_gust=group.weather.wind.gust if group.weather.wind else None,
+            clouds=[{'amount': c.amount, 'height': c.height, 'type': c.type} for c in group.weather.clouds]
+        )
+        tempo_details.append(detail)
+
+    # 如果有多个 TEMPO，取最差值
+    tempo_weather = None
+    if active_tempo_groups:
+        tempo_weather = _get_worst_tempo(active_tempo_groups)
+
+    return TAFDisplay(
+        main=main_weather,
+        tempo=tempo_weather,
+        tempo_details=tempo_details,
+        tempo_groups=active_tempo_groups
+    )
+
+
+def _get_worst_tempo(tempo_groups: List[ChangeGroup]) -> WeatherState:
+    """
+    从多个 TEMPO 组中取最坏情况
+
+    - 能见度：取最小值
+    - 云底高：取最低值（不分云量）
+    - 风：取最大值（风速/阵风）
+    - 天气现象：按严重程度排序，取最严重的（包含关系去重）
+    """
+    worst = WeatherState()
+    worst.clouds = []
+    worst.weather = []
+
+    # 用于找最低云底高
+    lowest_cloud_height = None
+    lowest_cloud = None
+
+    for group in tempo_groups:
+        tw = group.weather
+
+        # 能见度：取最小值
+        if tw.visibility is not None:
+            if worst.visibility is None or tw.visibility < worst.visibility:
+                worst.visibility = tw.visibility
+
+        # 风：取最大值
+        if tw.wind:
+            if worst.wind is None:
+                worst.wind = deepcopy(tw.wind)
+            else:
+                # 比较风速
+                if tw.wind.speed and (worst.wind.speed is None or tw.wind.speed > worst.wind.speed):
+                    worst.wind.speed = tw.wind.speed
+                # 比较阵风
+                if tw.wind.gust and (worst.wind.gust is None or tw.wind.gust > worst.wind.gust):
+                    worst.wind.gust = tw.wind.gust
+                # 风向：如果不同，设为可变
+                if tw.wind.direction and worst.wind.direction:
+                    if tw.wind.direction != worst.wind.direction:
+                        worst.wind.variable = True
+                elif tw.wind.direction and worst.wind.direction is None:
+                    worst.wind.direction = tw.wind.direction
+
+        # 云底高：找最低的云（不分云量类型）
+        if tw.clouds:
+            for cloud in tw.clouds:
+                if cloud.height is not None:
+                    if lowest_cloud_height is None or cloud.height < lowest_cloud_height:
+                        lowest_cloud_height = cloud.height
+                        lowest_cloud = deepcopy(cloud)
+
+        # 天气现象：收集所有
+        if tw.weather:
+            for w in tw.weather:
+                if w not in worst.weather:
+                    worst.weather.append(w)
+
+    # 将最低的云添加到结果中
+    if lowest_cloud:
+        worst.clouds = [lowest_cloud]
+
+    # 天气现象：按严重程度排序并去重
+    worst.weather = _merge_weather_phenomena(worst.weather)
+
+    return worst
+
+
+def _merge_weather_phenomena(weather_list: List[str]) -> List[str]:
+    """
+    合并天气现象，按严重程度排序并去重
+
+    严重程度评分（越高越严重）：
+    - 雷暴 (TS) + 降水：最严重
+    - 冰雹 (GR)：非常严重
+    - 阵性降水 (SH)：较严重
+    - 沙暴/尘暴 (SS/DS)：严重
+    - 雾 (FG)：严重影响能见度
+    - 降水 (RA/SN 等)：中等
+    - 轻雾/霾 (BR/HZ)：较轻
+    """
+    if not weather_list:
+        return []
+
+    # 天气现象严重程度评分
+    severity_scores = {
+        # 雷暴类（最严重）
+        'TSRA': 90, 'TSSN': 85, 'TS': 80, 'TSPL': 88, 'TSGR': 95, 'TSGS': 92,
+        # 冻雨（非常严重，仅次于冰雹）
+        'FZRA': 78, 'FZDZ': 76,
+        # 冰雹
+        'GR': 75, 'GS': 70, 'PL': 65, 'IC': 60,
+        # 沙暴/尘暴（提升到最高优先级）
+        'SS': 88, 'DS': 86,
+        # 阵性降水
+        'SHRA': 55, 'SHSN': 52, 'SHGR': 58, 'SHGS': 56, 'SH': 50,
+        # 雾类（影响能见度）
+        'FG': 60, 'VCFG': 55, 'MIFG': 50, 'BCFG': 48,
+        # 降水类（提升到阵性降水前面）
+        'RA': 62, 'SN': 61, 'DZ': 58, 'SG': 57, 'PE': 59,
+        # 视程障碍
+        'FU': 45, 'VA': 48, 'DU': 35, 'SA': 38, 'HZ': 32, 'BR': 25,
+        # 其他
+        'SQ': 60, 'FC': 65, 'PO': 55,
+        # 高吹/低吹
+        'DRSA': 40, 'DRDU': 38, 'DRSN': 42,
+        # 高吹沙/尘（比低吹严重）
+        'BLSA': 55, 'BLDU': 53, 'BLPY': 50,
+    }
+
+    # 去重处理：如果存在包含关系，保留更严重的
+    # TSRA 包含 RA，TSSN 包含 SN 等
+    simplified = []
+    for w in weather_list:
+        # 检查是否已被更严重的包含
+        is_superseded = False
+        for existing in simplified:
+            if _is_weather_superseded(w, existing):
+                is_superseded = True
+                break
+            if _is_weather_superseded(existing, w):
+                simplified.remove(existing)
+        if not is_superseded:
+            simplified.append(w)
+
+    # 按严重程度排序
+    simplified.sort(key=lambda x: severity_scores.get(x, 50), reverse=True)
+
+    # 只保留最严重的前 3 个（避免显示过多）
+    return simplified[:3]
+
+
+def _is_weather_superseded(w1: str, w2: str) -> bool:
+    """
+    判断 w1 是否被 w2 包含（即 w2 更严重/更全面）
+
+    例如：RA 被 TSRA 包含，SN 被 TSSN 包含，SHRA 被 TSRA 包含
+    """
+    # 去除强度前缀进行比较
+    w1_code = w1.lstrip('+-')
+    w2_code = w2.lstrip('+-')
+
+    # 雷暴 (TS) 包含所有阵性降水 (SH) 和普通降水
+    if w2_code.startswith('TS') and not w1_code.startswith('TS'):
+        # TSRA 包含 RA, SHRA; TSSN 包含 SN, SHSN; 等
+        w2_base = w2_code[2:] if len(w2_code) > 2 else ''
+        w1_base = w1_code[2:] if w1_code.startswith('SH') else w1_code
+        if w1_code.startswith('SH'):
+            # SHRA 被 TSRA 包含
+            if w2_base == w1_base or (not w2_base and w1_base in ['RA', 'SN', 'GR', 'GS', 'PL', 'DZ']):
+                return True
+        elif w2_base == w1_code or (not w2_base and w1_code in ['RA', 'SN', 'GR', 'GS', 'PL', 'DZ']):
+            return True
+        # TS 单独出现时包含所有降水
+        if not w2_base and w1_code in ['RA', 'SN', 'GR', 'GS', 'PL', 'DZ', 'SHRA', 'SHSN']:
+            return True
+
+    # 阵性降水 (SH) 包含普通降水
+    if w2_code.startswith('SH') and not w1_code.startswith('SH') and not w1_code.startswith('TS'):
+        w2_base = w2_code[2:]
+        if w2_base == w1_code:
+            return True
+
+    # 冻雨 (FZ) 包含普通降水
+    if w2_code.startswith('FZ') and not w1_code.startswith('FZ') and not w1_code.startswith('TS'):
+        w2_base = w2_code[2:]
+        if w2_base == w1_code:
+            return True
+        # FZRA 包含 RA，FZDZ 包含 DZ
+        if w2_code == 'FZRA' and w1_code == 'RA':
+            return True
+        if w2_code == 'FZDZ' and w1_code == 'DZ':
+            return True
+
+    # 强度前缀：+RA 比 RA 严重，-RA 比 RA 轻
+    if w1.lstrip('+-') == w2.lstrip('+-'):
+        if w1.startswith('-') and not w2.startswith('-'):
+            return True
+        if not w1.startswith('+') and w2.startswith('+'):
+            return True
+
+    # 吹雪/高吹雪：BLSN 包含 DRSN（吹雪比低吹雪严重）
+    bl_map = {'BLSA': ['DRSA'], 'BLDU': ['DRDU'], 'BLSN': ['DRSN'], 'BLPY': []}
+    if w2_code in bl_map and w1_code in bl_map[w2_code]:
+        return True
+
+    # 雾：FG 包含 MIFG/BCFG/PRFG 等
+    if w2_code == 'FG' and w1_code in ['MIFG', 'BCFG', 'PRFG', 'VCFG']:
+        return True
+
+    return False
 
 
 def _merge_weather(base: WeatherState, change: WeatherState) -> WeatherState:
