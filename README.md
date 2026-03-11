@@ -309,11 +309,12 @@ pip install -r requirements.txt
 - [x] 支持英制单位（SM 能见度、KT 风速）
 - [x] 支持 FMDDHHMM 格式（FM 变化组带时间）
 - [x] 支持天气现象完整解析（强度、特征、类型）
+- [x] 支持 WMO 报头格式（如 FTUS31 KWBC 071740）
 - [x] 每小时天气时间线展示
 - [x] TEMPO/BECMG/FM 变化组详细展示
 - [x] 时区显示选项（UTC、北京时间）
 - [ ] 完整验证逻辑
-- [ ] 更多 TAF 变体支持（PROB、INTER 等）
+- [x] 更多 TAF 变体支持（PROB、INTER 等）
 
 ## 参考文献
 
@@ -324,6 +325,7 @@ pip install -r requirements.txt
 
 ## 版本历史
 
+- v0.6.0 (2026-03) - 支持 WMO 报头格式（如 FTUS31 KWBC 071740）
 - v0.5.0 (2026-03) - 每小时趋势表格：主体与 TEMPO 分开、新增 BECMG/FM 列、多 TEMPO 分行显示
 - v0.4.0 (2026-03) - TEMPO 主体分开显示、TEMPO 明细表、最坏情况汇总逻辑
 - v0.3.0 (2026-03) - 完整支持 FM 变化组、英制单位、时区显示

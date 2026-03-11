@@ -34,6 +34,12 @@ def parse_taf(taf_text: str) -> TAF:
     lines = [line.strip() for line in taf_text.strip().split('\n') if line.strip()]
     tokens = []
     for line in lines:
+        # 移除 WMO 报头（如 FTUS31 KWBC 071740）
+        # WMO 报头格式：行号 + 发报中心 + 时间，后面跟着 TAF
+        # 例如：FTUS31 KWBC 071740 TAF ...
+        # 方法：匹配 TAF 之前的所有内容和 TAF 标记本身
+        line = re.sub(r'^.*?\s+(?=TAF\s)', '', line, flags=re.IGNORECASE)
+
         # 移除 TAF 开头标记（包括 TAF AMD 修订报、TAF COR 更正报）
         # 根据《民用航空气象报文规范》附录二 2.1
         line = re.sub(r'^TAF\s+(AMD\s+|COR\s+)?', '', line, flags=re.IGNORECASE)
