@@ -40,9 +40,16 @@ def parse_taf(taf_text: str) -> TAF:
         # 方法：匹配 TAF 之前的所有内容和 TAF 标记本身
         line = re.sub(r'^.*?\s+(?=TAF\s)', '', line, flags=re.IGNORECASE)
 
+        # 跳过纯 WMO 报头行（不含 TAF 的行）
+        # WMO 报头格式：4 字母数字 + 空格 + 4 字母 + 空格 + 6 数字
+        if re.match(r'^[A-Z0-9]{4,}\s+[A-Z]{3,4}\s+\d{6}\s*$', line, flags=re.IGNORECASE):
+            continue
+
         # 移除 TAF 开头标记（包括 TAF AMD 修订报、TAF COR 更正报）
         # 根据《民用航空气象报文规范》附录二 2.1
         line = re.sub(r'^TAF\s+(AMD\s+|COR\s+)?', '', line, flags=re.IGNORECASE)
+        # 移除报文结束标记 = （可能附在最后一个 token 后面，如 3000=）
+        line = line.replace('=', ' ')
         tokens.extend(line.split())
 
     if not tokens:
@@ -476,6 +483,7 @@ def parse_change_group(
                 from_time, to_time = parse_ddhhddhh(time_token, base_date)
 
                 # 检查后面是否有 FM/TL/AT
+                # 注意：如果不是 FM/TL/AT，需要将 token 放回迭代器让 parse_weather_state 处理
                 try:
                     next_tok = next(token_iter)
                     if next_tok.startswith('FM') and len(next_tok) > 2 and next_tok[2:].isdigit():
@@ -489,7 +497,12 @@ def parse_change_group(
                         from_time = parse_ddhhmm(next_tok[2:], base_date)
                         to_time = from_time
                     else:
-                        remaining_tokens.append(next_tok)
+                        # 不是 FM/TL/AT，是天气元素，需要放回迭代器让 parse_weather_state 处理
+                        # 创建一个新迭代器，先返回这个 token，再返回剩余的
+                        def chain_iter(first, rest):
+                            yield first
+                            yield from rest
+                        token_iter = chain_iter(next_tok, token_iter)
                 except StopIteration:
                     pass
         else:
