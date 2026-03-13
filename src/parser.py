@@ -45,6 +45,11 @@ def parse_taf(taf_text: str) -> TAF:
         if re.match(r'^[A-Z0-9]{4,}\s+[A-Z]{3,4}\s+\d{6}\s*$', line, flags=re.IGNORECASE):
             continue
 
+        # 跳过不含 TAF 标记且不是以 4 字母 ICAO 代码开头的行
+        # 例如 FTNMG3 ZSSS GAG 这种行应该被跳过
+        if 'TAF' not in line.upper() and not re.match(r'^[A-Z]{4}\s', line):
+            continue
+
         # 移除 TAF 开头标记（包括 TAF AMD 修订报、TAF COR 更正报）
         # 根据《民用航空气象报文规范》附录二 2.1
         line = re.sub(r'^TAF\s+(AMD\s+|COR\s+)?', '', line, flags=re.IGNORECASE)
