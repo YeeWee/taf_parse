@@ -72,6 +72,7 @@ def parse_taf(taf_text: str) -> TAF:
         raise TAFParseError("TAF 报文格式不完整，缺少必要的头部信息")
 
     # 验证 ICAO 代码
+    icao = icao.upper()
     if len(icao) != 4 or not icao.isalpha():
         raise TAFParseError(f"无效的 ICAO 代码：{icao}")
 
@@ -138,7 +139,7 @@ def parse_issue_time(time_str: str) -> datetime:
     根据 TAF 规范，发布日期只有日、时、分，没有月份和年份。
     月份和年份根据当前日期推断。
     """
-    if not time_str.endswith('Z'):
+    if not time_str.upper().endswith('Z'):
         raise TAFParseError(f"发布时间格式错误，应以 Z 结尾：{time_str}")
     return parse_ddhhmm(time_str[:-1], datetime.utcnow())
 

@@ -20,6 +20,9 @@ def parse_ddhhmm(ddhhmm_str: str, base_date: Optional[datetime] = None) -> datet
     if base_date is None:
         base_date = datetime.utcnow()
 
+    # 处理大小写
+    ddhhmm_str = ddhhmm_str.upper()
+
     day = int(ddhhmm_str[0:2])
     hour = int(ddhhmm_str[2:4])
     minute = int(ddhhmm_str[4:6])
@@ -55,6 +58,8 @@ def parse_ddhhddhh(ddhhddhh_str: str, base_date: Optional[datetime] = None) -> t
     Returns:
         (from_datetime, to_datetime)
     """
+    # 处理大小写
+    ddhhddhh_str = ddhhddhh_str.upper()
     from_str, to_str = ddhhddhh_str.split('/')
     from_dt = parse_ddhhmm(from_str + "00", base_date)
     to_dt = parse_ddhhmm(to_str + "00", base_date)
