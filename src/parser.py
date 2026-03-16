@@ -34,21 +34,25 @@ def parse_taf(taf_text: str) -> TAF:
     lines = [line.strip() for line in taf_text.strip().split('\n') if line.strip()]
     tokens = []
     for line in lines:
-        # 移除 WMO 报头（如 FTUS31 KWBC 071740）
-        # WMO 报头格式：行号 + 发报中心 + 时间，后面跟着 TAF
-        # 例如：FTUS31 KWBC 071740 TAF ...
-        # 方法：匹配 TAF 之前的所有内容和 TAF 标记本身
-        line = re.sub(r'^.*?\s+(?=TAF\s)', '', line, flags=re.IGNORECASE)
-
-        # 跳过纯 WMO 报头行（不含 TAF 的行）
-        # WMO 报头格式：4 字母数字 + 空格 + 4 字母 + 空格 + 6 数字
-        if re.match(r'^[A-Z0-9]{4,}\s+[A-Z]{3,4}\s+\d{6}\s*$', line, flags=re.IGNORECASE):
-            continue
-
-        # 跳过不含 TAF 标记且不是以 4 字母 ICAO 代码开头的行
-        # 例如 FTNMG3 ZSSS GAG 这种行应该被跳过
-        if 'TAF' not in line.upper() and not re.match(r'^[A-Z]{4}\s', line):
-            continue
+        # 检查是否包含 TAF 标记
+        if 'TAF' in line.upper():
+            # 提取 TAF 标记之后的内容
+            # 处理格式：FTDL31 EDZO 132300 TAF EDDF ...
+            taf_match = re.search(r'\bTAF\s+(.*)', line, flags=re.IGNORECASE)
+            if taf_match:
+                line = taf_match.group(1)
+            else:
+                # 没有找到 TAF 后的内容，跳过此行
+                continue
+        else:
+            # 不含 TAF 标记的行，检查是否是 WMO 报头
+            if re.match(r'^[A-Z0-9]{4,}\s+[A-Z]{3,4}\s+\d{6}\s*$', line, flags=re.IGNORECASE):
+                continue
+            # 检查是否以 4 字母 ICAO 开头，或者以变化组标记开头（TEMPO/INTER/BECMG/PROB 等）
+            if not re.match(r'^[A-Z]{4}\s', line):
+                # 检查是否是变化组行
+                if not re.match(r'^(TEMPO|INTER|BECMG|PROB\d{2})\s', line, flags=re.IGNORECASE):
+                    continue
 
         # 移除 TAF 开头标记（包括 TAF AMD 修订报、TAF COR 更正报）
         # 根据《民用航空气象报文规范》附录二 2.1
@@ -98,16 +102,19 @@ def parse_taf(taf_text: str) -> TAF:
         # 检查是否是变化组开始
         # 注意：FM 可能带时间（如 FM090600），需要特殊处理
         change_type = token
+        # 标准变化组类型
         if token in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER'):
             pass  # 标准格式
-        elif token.startswith('FM') and len(token) > 2 and token[2:].isdigit():
-            change_type = 'FM'  # FMDDHHMM 格式
+        # PROBxx 格式（如 PROB30、PROB40）
         elif token.startswith('PROB') and len(token) > 4 and token[4:].isdigit():
-            change_type = 'PROB'  # PROB30、PROB40 等格式
+            change_type = 'PROB'  # 规范化为 PROB
+        # INTER 后跟概率值的情况（罕见）
+        elif token.startswith('INTER') and len(token) > 5:
+            change_type = 'INTER'
         else:
             change_type = None
 
-        if change_type in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER'):
+        if change_type and change_type.split()[0] in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER'):
             change_group, remaining = parse_change_group(
                 token, current_token_iter, issue_time, valid_from, valid_to
             )
@@ -271,7 +278,12 @@ def parse_wind(token: str) -> Optional[Wind]:
     # 解析阵风
     gust_match = re.search(r'G(\d+)', token)
     if gust_match:
-        wind.gust = int(gust_match.group(1))
+        gust_value = int(gust_match.group(1))
+        # 阵风值也需要单位转换
+        if unit == 'KT':
+            wind.gust = int(gust_value * 0.514444)
+        else:
+            wind.gust = gust_value
         token = token[:gust_match.start()] + token[gust_match.end():]
 
     # 解析风向和风速
@@ -404,23 +416,28 @@ def is_weather_token(token: str) -> bool:
 
 def is_cloud_token(token: str) -> bool:
     """判断是否是云组"""
-    cloud_amounts = ('SKC', 'FEW', 'SCT', 'BKN', 'OVC', 'NCD')
+    cloud_amounts = ('SKC', 'FEW', 'SCT', 'BKN', 'OVC', 'NCD', 'VV')
     return any(token.startswith(amount) for amount in cloud_amounts)
 
 
 def parse_cloud(token: str) -> Optional[Cloud]:
     """解析云组"""
-    cloud_amounts = ('SKC', 'FEW', 'SCT', 'BKN', 'OVC')
+    cloud_amounts = ('SKC', 'FEW', 'SCT', 'BKN', 'OVC', 'VV')
 
     for amount in cloud_amounts:
         if token.startswith(amount):
             cloud = Cloud(amount=amount)
             remaining = token[len(amount):]
 
-            # 解析云高
-            if remaining and len(remaining) >= 3 and remaining[:3].isdigit():
-                cloud.height = int(remaining[:3]) * 100
-                remaining = remaining[3:]
+            # 解析云高（对于 VV，这是垂直能见度）
+            if remaining and len(remaining) >= 3:
+                # 支持 /// 格式（不明）
+                if remaining[:3] == '///':
+                    cloud.height = None  # 垂直能见度不明
+                    remaining = remaining[3:]
+                elif remaining[:3].isdigit():
+                    cloud.height = int(remaining[:3]) * 100
+                    remaining = remaining[3:]
 
             # 解析云类型
             if remaining in ('CB', 'TCU'):
@@ -438,7 +455,7 @@ def parse_change_group(
     valid_from: datetime,
     valid_to: datetime
 ) -> Tuple[Optional[ChangeGroup], List[str]]:
-    """解析变化组"""
+    """解析变化组（TEMPO/INTER/PROB 等短时预报）"""
     change_type = first_token
     probability = None
     from_time = None
@@ -446,19 +463,34 @@ def parse_change_group(
 
     remaining_tokens = []
 
-    # 处理 PROB
-    # 检查是否是 PROB30 这种格式（first_token 就是 PROB30）
+    # 短时预报类型标记
+    is_tempo = first_token == 'TEMPO'
+    is_inter = first_token == 'INTER'
+    prob_value = None
+
+    # 处理 PROBxx 开头（如 PROB30、PROB40）
     if first_token.startswith('PROB') and len(first_token) > 4 and first_token[4:].isdigit():
-        probability = int(first_token[4:])
+        prob_value = int(first_token[4:])
         change_type = f'PROB{probability}'
-        # 继续解析时间和天气
+        # 检查下一个 token 是否是 TEMPO 或 INTER
+        try:
+            next_token = next(token_iter)
+            if next_token == 'TEMPO':
+                change_type = f'PROB{prob_value} TEMPO'
+            elif next_token == 'INTER':
+                change_type = f'PROB{prob_value} INTER'
+            else:
+                remaining_tokens.append(next_token)
+        except StopIteration:
+            return None, remaining_tokens
     elif change_type == 'PROB':
+        # PROB 后跟概率值的格式
         try:
             prob_token = next(token_iter)
             probability = int(prob_token)
-            # 后面通常跟着 TEMPO
+            # 后面通常跟着 TEMPO 或 INTER
             next_token = next(token_iter)
-            if next_token in ('TEMPO', 'BECMG'):
+            if next_token in ('TEMPO', 'INTER', 'BECMG'):
                 change_type = f'PROB{probability} {next_token}'
             else:
                 remaining_tokens.append(next_token)
@@ -474,12 +506,20 @@ def parse_change_group(
             to_time = valid_to
             change_type = 'FM'  # 规范化为 FM
         elif first_token.startswith('PROB') and len(first_token) > 4 and first_token[4:].isdigit():
-            # PROB30 格式，时间下一个 token
-            time_token = next(token_iter)
-            if '/' in time_token:
-                from_time, to_time = parse_ddhhddhh(time_token, base_date)
+            # PROBxx 后跟 TEMPO/INTER 或独立 PROB
+            if is_tempo or is_inter or 'TEMPO' in change_type or 'INTER' in change_type:
+                time_token = next(token_iter)
+                if '/' in time_token:
+                    from_time, to_time = parse_ddhhddhh(time_token, base_date)
+                else:
+                    remaining_tokens.append(time_token)
             else:
-                remaining_tokens.append(time_token)
+                # 独立 PROBxx（不带 TEMPO/INTER）
+                time_token = next(token_iter)
+                if '/' in time_token:
+                    from_time, to_time = parse_ddhhddhh(time_token, base_date)
+                else:
+                    remaining_tokens.append(time_token)
         elif first_token == 'BECMG':
             # BECMG 可能和 FM/TL/AT 组合
             time_token = next(token_iter)
@@ -566,14 +606,14 @@ def get_weather_at_time(taf: TAF, query_time: datetime) -> WeatherState:
 
 def get_weather_display_at_time(taf: TAF, query_time: datetime) -> TAFDisplay:
     """
-    获取指定时间的天气显示数据（主体和 TEMPO 分开）
+    获取指定时间的天气显示数据（主体和短时预报分开）
 
     Args:
         taf: 解析后的 TAF 对象
         query_time: 查询时间
 
     Returns:
-        TAFDisplay 对象，包含主体天气、TEMPO 明细和最坏情况
+        TAFDisplay 对象，包含主体天气、短时预报明细和最坏情况
 
     Raises:
         ValueError: 当查询时间不在 TAF 有效期内时
@@ -602,21 +642,31 @@ def get_weather_display_at_time(taf: TAF, query_time: datetime) -> TAFDisplay:
             if query_time >= change.to_time:
                 main_weather = _merge_weather(main_weather, change.weather)
 
-    # 收集当前时间生效的所有 TEMPO 组（包括 PROB）
-    active_tempo_groups = []
+    # 收集当前时间生效的所有短时预报组
+    # 包括：TEMPO, INTER, PROBxx, PROBxx TEMPO, PROBxx INTER, INTER PROBxx
+    # 这些类型时间重叠时，取最差值
+    short_term_groups = []
+
+    SHORT_TERM_TYPES = ('TEMPO', 'INTER', 'PROB')
+
     for change in taf.changes:
         if not change.from_time or not change.to_time:
             continue
 
-        # TEMPO/PROB: 只在时间段内暂时有效
-        # PROB30、PROB40 等概率组也视为 TEMPO 类型
-        if 'TEMPO' in change.type or change.type.startswith('PROB'):
-            if change.from_time <= query_time < change.to_time:
-                active_tempo_groups.append(change)
+        # 检查是否是短时预报类型
+        is_short_term = False
+        for st_type in SHORT_TERM_TYPES:
+            if st_type in change.type:
+                is_short_term = True
+                break
 
-    # 生成 TEMPO 明细
+        if is_short_term:
+            if change.from_time <= query_time < change.to_time:
+                short_term_groups.append(change)
+
+    # 生成短时预报明细
     tempo_details = []
-    for group in active_tempo_groups:
+    for group in short_term_groups:
         detail = TEMPODetail(
             time_range=f"{group.from_time.strftime('%H:%M')}-{group.to_time.strftime('%H:%M')}",
             visibility=group.weather.visibility,
@@ -628,16 +678,16 @@ def get_weather_display_at_time(taf: TAF, query_time: datetime) -> TAFDisplay:
         )
         tempo_details.append(detail)
 
-    # 如果有多个 TEMPO，取最差值
+    # 如果有多个短时预报，取最差值
     tempo_weather = None
-    if active_tempo_groups:
-        tempo_weather = _get_worst_tempo(active_tempo_groups)
+    if short_term_groups:
+        tempo_weather = _get_worst_tempo(short_term_groups)
 
     return TAFDisplay(
         main=main_weather,
         tempo=tempo_weather,
         tempo_details=tempo_details,
-        tempo_groups=active_tempo_groups
+        tempo_groups=short_term_groups
     )
 
 
@@ -657,6 +707,9 @@ def _get_worst_tempo(tempo_groups: List[ChangeGroup]) -> WeatherState:
     # 用于找最低云底高
     lowest_cloud_height = None
     lowest_cloud = None
+    # 用于记录 VV/// (垂直能见度不明)
+    has_vv_unknown = False
+    vv_unknown_cloud = None
 
     for group in tempo_groups:
         tw = group.weather
@@ -687,7 +740,11 @@ def _get_worst_tempo(tempo_groups: List[ChangeGroup]) -> WeatherState:
         # 云底高：找最低的云（不分云量类型）
         if tw.clouds:
             for cloud in tw.clouds:
-                if cloud.height is not None:
+                # 特殊处理 VV/// (垂直能见度不明)
+                if cloud.amount == 'VV' and cloud.height is None:
+                    has_vv_unknown = True
+                    vv_unknown_cloud = deepcopy(cloud)
+                elif cloud.height is not None:
                     if lowest_cloud_height is None or cloud.height < lowest_cloud_height:
                         lowest_cloud_height = cloud.height
                         lowest_cloud = deepcopy(cloud)
@@ -698,8 +755,11 @@ def _get_worst_tempo(tempo_groups: List[ChangeGroup]) -> WeatherState:
                 if w not in worst.weather:
                     worst.weather.append(w)
 
-    # 将最低的云添加到结果中
-    if lowest_cloud:
+    # 将最低的云或 VV/// 添加到结果中
+    # 优先显示 VV/// (垂直能见度不明是最严重的情况)
+    if vv_unknown_cloud:
+        worst.clouds = [vv_unknown_cloud]
+    elif lowest_cloud:
         worst.clouds = [lowest_cloud]
 
     # 天气现象：按严重程度排序并去重

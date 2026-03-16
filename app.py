@@ -245,6 +245,22 @@ if taf_text.strip():
             st.divider()
             st.subheader("📈 每小时天气趋势")
 
+            # CSS 样式 - 统一表格字体大小，避免多行文本导致字体渲染过大
+            st.markdown("""
+                <style>
+                div[data-testid="stDataFrame"] table {
+                    font-size: 14px !important;
+                }
+                div[data-testid="stTable"] table {
+                    font-size: 14px !important;
+                }
+                div[data-testid="stDataFrame"] td, div[data-testid="stTable"] td {
+                    font-size: 14px !important;
+                    line-height: 1.2 !important;
+                }
+                </style>
+            """, unsafe_allow_html=True)
+
             # 创建每小时时间线数据
             timeline_data = []
             current_time = taf.valid_from
@@ -381,12 +397,12 @@ if taf_text.strip():
                     tempo_cloud = [row["cloud"] for row in tempo_rows]
                     tempo_weather_list = [row["weather"] for row in tempo_rows]
 
-                    # 多个 TEMPO 用换行分隔显示
-                    main_row["TEMPO 时段"] = "  \n".join(tempo_times)
-                    main_row["TEMPO 能见度"] = "  \n".join(tempo_vis)
-                    main_row["TEMPO 风"] = "  \n".join(tempo_wind)
-                    main_row["TEMPO 云"] = "  \n".join(tempo_cloud)
-                    main_row["TEMPO 天气"] = "  \n".join(tempo_weather_list)
+                    # 多个 TEMPO 用换行分隔显示（使用纯文本换行，避免 markdown 渲染导致字体变大）
+                    main_row["TEMPO 时段"] = "\n".join(tempo_times)
+                    main_row["TEMPO 能见度"] = "\n".join(tempo_vis)
+                    main_row["TEMPO 风"] = "\n".join(tempo_wind)
+                    main_row["TEMPO 云"] = "\n".join(tempo_cloud)
+                    main_row["TEMPO 天气"] = "\n".join(tempo_weather_list)
 
                     # TEMPO 最坏情况（多个 TEMPO 时）
                     if weather_display.tempo and len(tempo_rows) > 1:
@@ -408,7 +424,12 @@ if taf_text.strip():
 
                 current_time += timedelta(hours=1)
 
-            st.table(timeline_data)
+            # 使用 dataframe 替代 table，并通过 CSS 统一字体大小
+            st.dataframe(
+                timeline_data,
+                use_container_width=True,
+                hide_index=True,
+            )
 
         # 显示查询时间的天气
         st.divider()

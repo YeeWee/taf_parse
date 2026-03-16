@@ -130,6 +130,7 @@ def weather_code_to_cn(code: str) -> str:
         return '无重要天气'
 
     # 处理常见组合（按文档规范的组合顺序）
+    # 注意：这些是不带强度前缀的基础代码翻译
     special_cases = {
         # 雷暴组合
         'TSRA': '雷暴伴雨',
@@ -164,8 +165,8 @@ def weather_code_to_cn(code: str) -> str:
         'TS': '雷暴',
         'BR': '轻雾',
         'FG': '雾',
-        'RA': '雨',
-        'SN': '雪',
+        'RA': '中雨',  # 不带+-前缀的 RA 标记为中雨
+        'SN': '中雪',  # 不带+-前缀的 SN 标记为中雪
         'DZ': '毛毛雨',
         'GR': '冰雹',
         'GS': '小冰雹',
@@ -185,8 +186,15 @@ def weather_code_to_cn(code: str) -> str:
         'DS': '尘暴',
     }
 
+    # 带强度前缀的基础代码翻译（去掉"中"字）
+    intensity_base = {
+        'RA': '雨',
+        'SN': '雪',
+    }
+
     # 处理前缀（强度）
     prefix = ""
+    original_code = code
     if code.startswith("+"):
         prefix = "强"
         code = code[1:]
@@ -202,6 +210,10 @@ def weather_code_to_cn(code: str) -> str:
     elif code.startswith('RE'):
         feature_prefix = "近来"
         code = code[2:]
+
+    # 如果是带强度前缀的基础代码（RA/SN），使用特殊翻译
+    if prefix and code in intensity_base:
+        return prefix + intensity_base[code]
 
     # 检查特殊组合
     if code in special_cases:
