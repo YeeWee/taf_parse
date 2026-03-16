@@ -40,6 +40,7 @@ class ChangeGroup(BaseModel):
     from_time: Optional[datetime] = None
     to_time: Optional[datetime] = None
     weather: WeatherState
+    before_weather: Optional[WeatherState] = Field(None, description="BECMG 变化前的天气状态（用于取较差值）")
 
 
 class TEMPODetail(BaseModel):

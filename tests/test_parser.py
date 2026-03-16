@@ -3,7 +3,7 @@ TAF 解析器测试
 """
 
 import pytest
-from taf_parse.parser import parse_taf
+from src.parser import parse_taf
 
 
 class TestTAFParser:
