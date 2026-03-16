@@ -50,8 +50,9 @@ def parse_taf(taf_text: str) -> TAF:
                 continue
             # 检查是否以 4 字母 ICAO 开头，或者以变化组标记开头（TEMPO/INTER/BECMG/PROB 等）
             if not re.match(r'^[A-Z]{4}\s', line):
-                # 检查是否是变化组行
-                if not re.match(r'^(TEMPO|INTER|BECMG|PROB\d{2})\s', line, flags=re.IGNORECASE):
+                # 检查是否是变化组行（包括 FMddhhmm 格式）
+                # FMddhhmm: FM 后跟 6 位数字 (DDHHMM)
+                if not re.match(r'^(TEMPO|INTER|BECMG|PROB\d{2}|FM\d{6})\s', line, flags=re.IGNORECASE):
                     continue
 
         # 移除 TAF 开头标记（包括 TAF AMD 修订报、TAF COR 更正报）
@@ -102,19 +103,26 @@ def parse_taf(taf_text: str) -> TAF:
         # 检查是否是变化组开始
         # 注意：FM 可能带时间（如 FM090600），需要特殊处理
         change_type = token
-        # 标准变化组类型
+        is_change_group = False
+
+        # 标准变化组类型（单独出现）
         if token in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER'):
-            pass  # 标准格式
+            is_change_group = True
         # PROBxx 格式（如 PROB30、PROB40）
         elif token.startswith('PROB') and len(token) > 4 and token[4:].isdigit():
             change_type = 'PROB'  # 规范化为 PROB
+            is_change_group = True
         # INTER 后跟概率值的情况（罕见）
         elif token.startswith('INTER') and len(token) > 5:
             change_type = 'INTER'
+            is_change_group = True
+        # FM 带时间格式（如 FM150800）
+        elif token.startswith('FM') and len(token) > 2 and token[2:].isdigit():
+            is_change_group = True
         else:
             change_type = None
 
-        if change_type and change_type.split()[0] in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER'):
+        if is_change_group:
             change_group, remaining = parse_change_group(
                 token, current_token_iter, issue_time, valid_from, valid_to
             )
@@ -177,40 +185,60 @@ def parse_weather_state(
     wind_parsed = False
     visibility_parsed = False
 
-    for token in token_iter:
+    # 将 token_iter 转换为 list 便于向前 lookahead
+    tokens_list = list(token_iter)
+    i = 0
+
+    while i < len(tokens_list):
+        token = tokens_list[i]
+
         # 检查是否遇到变化组开始标记
         if token in ('FM', 'BECMG', 'TEMPO', 'PROB', 'INTER', 'TX', 'TN'):
             remaining.append(token)
             # 收集剩余所有 token
-            remaining.extend(list(token_iter))
+            remaining.extend(tokens_list[i + 1:])
             break
         # 检查是否是 PROB 带概率（如 PROB30、PROB40）
         if token.startswith('PROB') and len(token) > 4 and token[4:].isdigit():
             remaining.append(token)
             # 收集剩余所有 token
-            remaining.extend(list(token_iter))
+            remaining.extend(tokens_list[i + 1:])
             break
 
-        # 检查是否是 FM 开头带时间的标记（如 FM090600）
+        # 检查是否是 FM 开头带时间的标记（如 FM090600）- 必须在解析天气元素之前检查
         if token.startswith('FM') and len(token) > 2 and token[2:].isdigit():
             remaining.append(token)
             # 收集剩余所有 token
-            remaining.extend(list(token_iter))
+            remaining.extend(tokens_list[i + 1:])
             break
 
         # 检查是否遇到备注标记，跳过后续内容
         if token in ('RMK', 'NXT', 'FCST', 'BY'):
             # 跳过备注部分
-            remaining.extend(list(token_iter))
+            remaining.extend(tokens_list[i + 1:])
             break
 
         # 尝试解析风
         if not wind_parsed and is_wind_token(token):
             weather.wind = parse_wind(token)
             wind_parsed = True
+            i += 1
             continue
 
         # 尝试解析能见度
+        # 检查是否是带整数部分的分数格式（如 "1" + "1/2SM"）
+        if not visibility_parsed and is_visibility_fraction_start(token):
+            next_token = tokens_list[i + 1] if i + 1 < len(tokens_list) else None
+            if next_token and next_token.endswith('SM') and '/' in next_token:
+                # 合并处理：z x/ySM 格式
+                vis = parse_visibility_with_fraction(token, next_token)
+                if vis is not None:
+                    weather.visibility = vis
+                    visibility_parsed = True
+                    i += 2  # 跳过两个 token
+                    continue
+
+        # 尝试解析标准能见度格式
         if not visibility_parsed and is_visibility_token(token):
             if token == 'CAVOK':
                 weather.cavok = True
@@ -220,11 +248,13 @@ def parse_weather_state(
                 if vis is not None:
                     weather.visibility = vis
             visibility_parsed = True
+            i += 1
             continue
 
         # 尝试解析天气现象
         if is_weather_token(token):
             weather.weather.append(token)
+            i += 1
             continue
 
         # 尝试解析云
@@ -232,20 +262,24 @@ def parse_weather_state(
             cloud = parse_cloud(token)
             if cloud:
                 weather.clouds.append(cloud)
+            i += 1
             continue
 
         # NSW - No Significant Weather
         if token == 'NSW':
             weather.weather = []
+            i += 1
             continue
 
         # NCD - No Cloud Detected
         if token == 'NCD':
             weather.clouds = []
+            i += 1
             continue
 
         # 未知 token，可能是变化组的一部分，保存起来
         remaining.append(token)
+        i += 1
 
     return weather, remaining
 
@@ -312,11 +346,26 @@ def is_visibility_token(token: str) -> bool:
     """判断是否是能见度或 CAVOK"""
     if token == 'CAVOK':
         return True
-    # 米制：纯数字，如 6000、1500
-    if token.isdigit() and len(token) <= 4:
+    # 米制：纯数字，如 6000、1500（至少 2 位，避免与带分数整数部分混淆）
+    if token.isdigit() and 2 <= len(token) <= 4:
         return True
     # 英制：如 P6SM、5SM、1/2SM、3/4SM 等
     if token.endswith('SM'):
+        return True
+    # 单个数字（0-9）可能是带分数能见度的整数部分，但不在此处处理
+    # 需要在 parse_weather_state 中通过 lookahead 检查
+    return False
+
+
+def is_visibility_fraction_start(token: str) -> bool:
+    """
+    判断是否是能见度带整数部分的开头（如 "1" 在 "1 1/2SM" 中）
+
+    北美 TAF 报文中常见格式：z x/ySM，如 "1 1/2SM"、"2 1/4SM"
+    分割后变成 ["1", "1/2SM"]，需要合并处理
+    """
+    # 0-9 的整数可能是带分数能见度的整数部分
+    if token.isdigit() and int(token) <= 9:
         return True
     return False
 
@@ -326,7 +375,7 @@ def parse_visibility(token: str) -> Optional[int]:
     解析能见度，返回米
 
     Args:
-        token: 能见度 token，如 '6000'、'P6SM'、'5SM'、'1/2SM'
+        token: 能见度 token，如 '6000'、'P6SM'、'5SM'、'1/2SM'、'1 1/2SM'
 
     Returns:
         能见度（米）
@@ -358,6 +407,40 @@ def parse_visibility(token: str) -> Optional[int]:
         return int(miles * 1609.34)
 
     return None
+
+
+def parse_visibility_with_fraction(int_part: str, frac_part: str) -> Optional[int]:
+    """
+    解析带整数部分的分数能见度格式（北美报文特有）
+
+    格式：z x/ySM，如：
+    - "1" + "1/2SM" = 1 又 1/2 英里 = 1.5 英里
+    - "2" + "1/4SM" = 2 又 1/4 英里 = 2.25 英里
+
+    Args:
+        int_part: 整数部分，如 "1"
+        frac_part: 分数部分（含 SM），如 "1/2SM"
+
+    Returns:
+        能见度（米）
+    """
+    if not frac_part.endswith('SM'):
+        return None
+
+    value_str = frac_part[:-2]  # 去掉 SM
+
+    if '/' not in value_str:
+        return None
+
+    num, denom = value_str.split('/')
+
+    try:
+        int_value = int(int_part)
+        frac_value = float(num) / float(denom)
+        miles = int_value + frac_value
+        return int(miles * 1609.34)
+    except (ValueError, ZeroDivisionError):
+        return None
 
 
 def is_weather_token(token: str) -> bool:
