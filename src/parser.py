@@ -8,10 +8,10 @@ from typing import Optional, List, Iterator, Tuple
 from copy import deepcopy
 
 try:
-    from .models import TAF, WeatherState, ChangeGroup, Wind, Cloud, TAFDisplay, TEMPODetail
+    from .models import TAF, WeatherState, ChangeGroup, Wind, Cloud, TAFDisplay, TEMPODetail, WindShear
     from .utils import parse_ddhhmm, parse_ddhhddhh
 except ImportError:
-    from models import TAF, WeatherState, ChangeGroup, Wind, Cloud, TAFDisplay, TEMPODetail
+    from models import TAF, WeatherState, ChangeGroup, Wind, Cloud, TAFDisplay, TEMPODetail, WindShear
     from utils import parse_ddhhmm, parse_ddhhddhh
 
 
@@ -38,7 +38,8 @@ def parse_taf(taf_text: str) -> TAF:
         if 'TAF' in line.upper():
             # 提取 TAF 标记之后的内容
             # 处理格式：FTDL31 EDZO 132300 TAF EDDF ...
-            taf_match = re.search(r'\bTAF\s+(.*)', line, flags=re.IGNORECASE)
+            # 以及：TAF AMD YSSY ... (修订报)、TAF COR ... (更正报)
+            taf_match = re.search(r'\bTAF\s+(?:AMD\s+|COR\s+)?(.*)', line, flags=re.IGNORECASE)
             if taf_match:
                 line = taf_match.group(1)
             else:
@@ -277,6 +278,16 @@ def parse_weather_state(
             i += 1
             continue
 
+        # 风切变预报
+        if is_wind_shear_token(token):
+            wind_shear = parse_wind_shear(token)
+            if wind_shear:
+                if weather.wind is None:
+                    weather.wind = Wind()
+                weather.wind.wind_shear = wind_shear
+            i += 1
+            continue
+
         # 未知 token，可能是变化组的一部分，保存起来
         remaining.append(token)
         i += 1
@@ -323,7 +334,12 @@ def parse_wind(token: str) -> Optional[Wind]:
     # 解析风向和风速
     if token.startswith('VRB'):
         wind.variable = True
-        speed_str = token[3:]
+        remaining = token[3:]  # 去掉 "VRB"
+        # 提取单位后缀
+        if remaining.endswith(unit):
+            speed_str = remaining[:-len(unit)]
+        else:
+            speed_str = remaining
     else:
         # 前 3 位是风向，后 2 位是风速
         if len(token) >= 5:
@@ -497,6 +513,105 @@ def is_weather_token(token: str) -> bool:
     return False
 
 
+def is_wind_shear_token(token: str) -> bool:
+    """判断是否是风切变组"""
+    # 格式：WShhh/wwwddffKT 或 WShhh/wwwddffMPS
+    # WS020/21045KT = 高度 200 英尺，风向 210 度，风速 45 节
+    if token.startswith('WS'):
+        remaining = token[2:]
+        # 检查格式：hhh/wwwddff 单位
+        if '/' in remaining:
+            parts = remaining.split('/')
+            if len(parts) == 2:
+                height_part = parts[0]
+                wind_part = parts[1]
+                # 高度应该是 3 位数字
+                if height_part.isdigit() and len(height_part) == 3:
+                    # 风速部分应该以 KT 或 MPS 结尾
+                    if wind_part.endswith(('KT', 'MPS')):
+                        return True
+    return False
+
+
+def parse_wind_shear(token: str) -> Optional[WindShear]:
+    """
+    解析风切变组
+
+    格式：WShhh/wwwddffKT
+    - hh: 高度（百英尺），如 020 = 2000 英尺
+    - www: 风向（度），如 210 = 210 度
+    - dd: 风速（节），如 45 = 45 节
+    - ff: 可选阵风
+
+    示例：WS020/21045KT = 2000 英尺高度，风向 210 度，风速 45 节
+    """
+    if not token.startswith('WS'):
+        return None
+
+    remaining = token[2:]
+
+    if '/' not in remaining:
+        return None
+
+    parts = remaining.split('/')
+    if len(parts) != 2:
+        return None
+
+    height_part = parts[0]
+    wind_part = parts[1]
+
+    # 解析高度（百英尺）
+    if not height_part.isdigit() or len(height_part) != 3:
+        return None
+
+    height = int(height_part) * 100  # 转换为英尺
+
+    # 解析单位
+    unit = 'MPS'
+    if wind_part.endswith('KT'):
+        unit = 'KT'
+        wind_part = wind_part[:-2]
+    elif wind_part.endswith('MPS'):
+        wind_part = wind_part[:-3]
+
+    # 解析风向和风速
+    # 格式：wwwdd(ff) 或 wwwddGff - 3 位风向 + 2 位风速 + 可选阵风
+    # 阵风可能用 G 分隔，如 21045G50 = 风向 210，风速 45，阵风 50
+    if len(wind_part) < 5:
+        return None
+
+    direction_str = wind_part[:3]
+    remaining = wind_part[3:]
+
+    # 检查是否有 G 阵风标记
+    gust = None
+    if 'G' in remaining:
+        speed_str, gust_str = remaining.split('G', 1)
+        if gust_str.isdigit():
+            gust = int(gust_str)
+            if unit == 'KT':
+                gust = int(gust * 0.514444)
+    else:
+        speed_str = remaining
+
+    if not direction_str.isdigit() or not speed_str.isdigit():
+        return None
+
+    direction = int(direction_str)
+    speed = int(speed_str)
+
+    # 单位转换
+    if unit == 'KT':
+        speed = int(speed * 0.514444)
+
+    return WindShear(
+        height=height,
+        direction=direction,
+        speed=speed,
+        gust=gust
+    )
+
+
 def is_cloud_token(token: str) -> bool:
     """判断是否是云组"""
     cloud_amounts = ('SKC', 'FEW', 'SCT', 'BKN', 'OVC', 'NCD', 'VV')
@@ -554,7 +669,7 @@ def parse_change_group(
     # 处理 PROBxx 开头（如 PROB30、PROB40）
     if first_token.startswith('PROB') and len(first_token) > 4 and first_token[4:].isdigit():
         prob_value = int(first_token[4:])
-        change_type = f'PROB{probability}'
+        change_type = f'PROB{prob_value}'
         # 检查下一个 token 是否是 TEMPO 或 INTER
         try:
             next_token = next(token_iter)
@@ -562,6 +677,9 @@ def parse_change_group(
                 change_type = f'PROB{prob_value} TEMPO'
             elif next_token == 'INTER':
                 change_type = f'PROB{prob_value} INTER'
+            elif '/' in next_token:
+                # 直接跟时间格式（如 PROB30 1218/1223），解析时间
+                from_time, to_time = parse_ddhhddhh(next_token, base_date)
             else:
                 remaining_tokens.append(next_token)
         except StopIteration:
@@ -763,6 +881,16 @@ def get_weather_display_at_time(taf: TAF, query_time: datetime) -> TAFDisplay:
     # 生成短时预报明细
     tempo_details = []
     for group in short_term_groups:
+        wind_shear_dict = None
+        if group.weather.wind and group.weather.wind.wind_shear:
+            ws = group.weather.wind.wind_shear
+            wind_shear_dict = {
+                'height': ws.height,
+                'direction': ws.direction,
+                'speed': ws.speed,
+                'gust': ws.gust
+            }
+
         detail = TEMPODetail(
             time_range=f"{group.from_time.strftime('%H:%M')}-{group.to_time.strftime('%H:%M')}",
             visibility=group.weather.visibility,
@@ -770,6 +898,7 @@ def get_weather_display_at_time(taf: TAF, query_time: datetime) -> TAFDisplay:
             wind_direction=group.weather.wind.direction if group.weather.wind else None,
             wind_speed=group.weather.wind.speed if group.weather.wind else None,
             wind_gust=group.weather.wind.gust if group.weather.wind else None,
+            wind_shear=wind_shear_dict,
             clouds=[{'amount': c.amount, 'height': c.height, 'type': c.type} for c in group.weather.clouds]
         )
         tempo_details.append(detail)
@@ -1063,8 +1192,11 @@ def _get_worse_weather(base: WeatherState, change: WeatherState) -> WeatherState
             # 比较阵风
             if change.wind.gust and (worst.wind.gust is None or change.wind.gust > worst.wind.gust):
                 worst.wind.gust = change.wind.gust
-            # 风向：如果不同且都不是可变风向，设为可变
-            if change.wind.direction and worst.wind.direction:
+            # 风向：如果变化是 VRB（可变风向），优先使用 VRB
+            if change.wind.variable:
+                worst.wind.variable = True
+                worst.wind.direction = None  # VRB 时清空具体风向
+            elif change.wind.direction and worst.wind.direction:
                 if change.wind.direction != worst.wind.direction:
                     worst.wind.variable = True
             elif change.wind.direction and worst.wind.direction is None:

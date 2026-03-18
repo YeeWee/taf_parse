@@ -248,9 +248,31 @@ CLOUD_AMOUNT_CN = {
     "SCT": "疏云",
     "BKN": "多云",
     "OVC": "阴天",
+    "VV": "垂直能见度",
 }
 
 
 def cloud_amount_to_cn(amount: str) -> str:
     """云量转中文"""
     return CLOUD_AMOUNT_CN.get(amount, amount)
+
+
+def cloud_type_to_cn(cloud_type: Optional[str]) -> str:
+    """
+    云类型转中文
+
+    Args:
+        cloud_type: 云类型代码（CB/TCU 等）
+
+    Returns:
+        中文云类型描述
+    """
+    if not cloud_type:
+        return ""
+
+    cloud_types = {
+        "CB": "积雨云",
+        "TCU": "浓积云",
+    }
+
+    return cloud_types.get(cloud_type, cloud_type)

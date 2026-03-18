@@ -7,12 +7,21 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+class WindShear(BaseModel):
+    """风切变数据"""
+    height: int = Field(..., description="风切变高度，单位英尺")
+    direction: int = Field(..., description="风向，单位度")
+    speed: int = Field(..., description="风速，单位 m/s")
+    gust: Optional[int] = Field(None, description="阵风，单位 m/s")
+
+
 class Wind(BaseModel):
     """风数据"""
     direction: Optional[int] = Field(None, description="风向，单位度")
     speed: Optional[int] = Field(None, description="风速，单位 m/s")
     gust: Optional[int] = Field(None, description="阵风，单位 m/s")
     variable: bool = Field(False, description="是否可变风向")
+    wind_shear: Optional[WindShear] = Field(None, description="风切变预报")
 
 
 class Cloud(BaseModel):
@@ -51,6 +60,7 @@ class TEMPODetail(BaseModel):
     wind_direction: Optional[int] = Field(None, description="风向（度）")
     wind_speed: Optional[int] = Field(None, description="风速（m/s）")
     wind_gust: Optional[int] = Field(None, description="阵风（m/s）")
+    wind_shear: Optional[dict] = Field(None, description="风切变预报")
     clouds: List[dict] = Field(default_factory=list, description="云况列表")
 
 

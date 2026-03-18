@@ -16,7 +16,7 @@ src_path = str(Path(__file__).parent / "src")
 sys.path.insert(0, src_path)
 
 from parser import parse_taf, get_weather_at_time, get_weather_display_at_time, TAFParseError
-from utils import weather_code_to_cn, cloud_amount_to_cn
+from utils import weather_code_to_cn, cloud_amount_to_cn, cloud_type_to_cn
 from models import WeatherState, TAFDisplay, ChangeGroup
 
 
@@ -121,12 +121,18 @@ def display_weather(weather: WeatherState):
         st.subheader("💨 风")
         if weather.wind:
             if weather.wind.variable:
-                st.write("风向：**可变**")
+                st.write(f"风向：**可变 (VRB)**")
             else:
                 st.write(f"风向：**{weather.wind.direction}°**")
             st.write(f"风速：**{weather.wind.speed} m/s**")
             if weather.wind.gust:
                 st.write(f"阵风：**{weather.wind.gust} m/s**")
+            # 显示风切变信息
+            if weather.wind.wind_shear:
+                ws = weather.wind.wind_shear
+                st.write(f"风切变：**{ws.height}ft** / {ws.direction}° {ws.speed}m/s")
+                if ws.gust:
+                    st.write(f"  阵风：**G{ws.gust}m/s**")
         else:
             st.write("无数据")
 
@@ -155,10 +161,11 @@ def display_weather(weather: WeatherState):
         for i, cloud in enumerate(weather.clouds):
             with cloud_cols[i]:
                 cn_amount = cloud_amount_to_cn(cloud.amount)
+                cn_type = cloud_type_to_cn(cloud.type) if cloud.type else None
                 st.metric(
                     label=cn_amount,
                     value=f"{cloud.height} ft" if cloud.height else "-",
-                    delta=cloud.type if cloud.type else None,
+                    delta=cn_type,
                 )
     else:
         st.write("无云数据")
@@ -271,14 +278,33 @@ if taf_text.strip():
                 # 状态图标和文字描述
                 status_icon = "☀️" if weather.cavok else "🌤️"
                 status_text = "CAVOK" if weather.cavok else "一般"
-                # 根据 TEMPO 天气更新状态
-                if weather_display.tempo:
-                    if "TS" in str(weather_display.tempo.weather):
+
+                # 确定用于显示的天气列表（优先使用 TEMPO 最坏情况，如果主体天气为空）
+                display_weather = weather.weather
+                if weather_display.tempo and weather_display.tempo.weather:
+                    # 如果 TEMPO 有更严重的天气，使用 TEMPO 的天气来判断状态
+                    tempo_wx = weather_display.tempo.weather
+                    if "TS" in str(tempo_wx):
                         status_icon = "⛈️"
                         status_text = "雷暴"
-                    elif "RA" in str(weather_display.tempo.weather):
+                    elif "RA" in str(tempo_wx):
                         status_icon = "🌧️"
                         status_text = "降雨"
+                    elif "SN" in str(tempo_wx) or "SHSN" in str(tempo_wx):
+                        status_icon = "🌨️"
+                        status_text = "降雪"
+                    elif "BR" in str(tempo_wx) or "FG" in str(tempo_wx):
+                        status_icon = "🌫️"
+                        status_text = "雾/轻雾"
+                    elif "SA" in str(tempo_wx) or "SS" in str(tempo_wx) or "DS" in str(tempo_wx):
+                        status_icon = "🌪️"
+                        status_text = "沙尘"
+                    elif "HZ" in str(tempo_wx):
+                        status_icon = "🌫️"
+                        status_text = "霾"
+                    # 当主体天气为空但 TEMPO 有天气时，使用 TEMPO 天气显示
+                    if not display_weather:
+                        display_weather = tempo_wx
                 elif weather.weather:
                     if "TS" in str(weather.weather):
                         status_icon = "⛈️"
@@ -286,7 +312,7 @@ if taf_text.strip():
                     elif "RA" in str(weather.weather):
                         status_icon = "🌧️"
                         status_text = "降雨"
-                    elif "SN" in str(weather.weather):
+                    elif "SN" in str(weather.weather) or "SHSN" in str(weather.weather):
                         status_icon = "🌨️"
                         status_text = "降雪"
                     elif "BR" in str(weather.weather) or "FG" in str(weather.weather):
@@ -300,7 +326,7 @@ if taf_text.strip():
                         status_text = "霾"
 
                 vis_text = "CAVOK" if weather.cavok else f"{weather.visibility}m"
-                weather_cn = [weather_code_to_cn(w) for w in weather.weather]
+                weather_cn = [weather_code_to_cn(w) for w in display_weather]
 
                 # 处理时区显示
                 utc_str = current_time.strftime("%H:%M")
@@ -317,17 +343,23 @@ if taf_text.strip():
                 wind_info = "-"
                 if weather.wind:
                     if weather.wind.variable:
-                        wind_info = "VRB"
+                        wind_info = f"VRB/{weather.wind.speed}m/s"
                     else:
                         wind_info = f"{weather.wind.direction}°/{weather.wind.speed}m/s"
                     if weather.wind.gust:
                         wind_info += f"(G{weather.wind.gust})"
+                    # 显示风切变信息
+                    if weather.wind.wind_shear:
+                        ws = weather.wind.wind_shear
+                        wind_info += f" [WS {ws.height}ft/{ws.direction}°{ws.speed}m/s]"
+                        if ws.gust:
+                            wind_info += f"(G{ws.gust})"
 
                 # 显示云层信息
                 cloud_info = "-"
                 if weather.clouds:
                     cloud_info = " | ".join([
-                        f"{cloud_amount_to_cn(c.amount)} {c.height}ft"
+                        f"{cloud_amount_to_cn(c.amount)} {c.height}ft{f' {cloud_type_to_cn(c.type)}' if c.type else ''}"
                         for c in weather.clouds
                     ])
 
@@ -342,9 +374,13 @@ if taf_text.strip():
                             if detail.wind_direction:
                                 wind_str = f"{detail.wind_direction}°/{detail.wind_speed}m/s"
                             else:
-                                wind_str = f"{detail.wind_speed}m/s"
+                                wind_str = f"VRB/{detail.wind_speed}m/s"
                             if detail.wind_gust:
                                 wind_str += f"(G{detail.wind_gust})"
+                            # 显示风切变信息（如果 TEMPODetail 中有）
+                            if hasattr(detail, 'wind_shear') and detail.wind_shear:
+                                ws = detail.wind_shear
+                                wind_str += f" [WS {ws.height}ft/{ws.direction}°{ws.speed}m/s]"
                         else:
                             wind_str = "-"
                         # 云
@@ -355,7 +391,7 @@ if taf_text.strip():
                                 if c.get('height'):
                                     s += f"({c['height']}ft)"
                                 if c.get('type'):
-                                    s += c['type']
+                                    s += f" {cloud_type_to_cn(c['type'])}"
                                 cloud_strs.append(s)
                             cloud_str = " | ".join(cloud_strs)
                         else:
@@ -466,7 +502,7 @@ if taf_text.strip():
                     if detail.wind_direction:
                         wind_str = f"{detail.wind_direction}°/{detail.wind_speed}m/s"
                     else:
-                        wind_str = f"{detail.wind_speed}m/s"
+                        wind_str = f"VRB/{detail.wind_speed}m/s"
                     if detail.wind_gust:
                         wind_str += f"(G{detail.wind_gust})"
                 else:
@@ -479,7 +515,7 @@ if taf_text.strip():
                         if c.get('height'):
                             s += f"({c['height']}ft)"
                         if c.get('type'):
-                            s += c['type']
+                            s += f" {cloud_type_to_cn(c['type'])}"
                         cloud_strs.append(s)
                     cloud_str = " | ".join(cloud_strs)
                 else:
@@ -520,7 +556,7 @@ st.divider()
 st.markdown(
     """
     <div style='text-align: center; color: #666;'>
-        <small>TAF Parse v0.2.0 | 基于 ICAO Annex 3 / WMO No. 306 规范</small>
+        <small>TAF Parse v0.15.0 | 基于 ICAO Annex 3 / WMO No. 306 规范</small>
     </div>
     """,
     unsafe_allow_html=True,
