@@ -280,7 +280,7 @@ if taf_text.strip():
                 status_text = "CAVOK" if weather.cavok else "一般"
 
                 # 确定用于显示的天气列表（优先使用 TEMPO 最坏情况，如果主体天气为空）
-                display_weather = weather.weather
+                display_weather_list = weather.weather
                 if weather_display.tempo and weather_display.tempo.weather:
                     # 如果 TEMPO 有更严重的天气，使用 TEMPO 的天气来判断状态
                     tempo_wx = weather_display.tempo.weather
@@ -303,8 +303,8 @@ if taf_text.strip():
                         status_icon = "🌫️"
                         status_text = "霾"
                     # 当主体天气为空但 TEMPO 有天气时，使用 TEMPO 天气显示
-                    if not display_weather:
-                        display_weather = tempo_wx
+                    if not display_weather_list:
+                        display_weather_list = tempo_wx
                 elif weather.weather:
                     if "TS" in str(weather.weather):
                         status_icon = "⛈️"
@@ -326,7 +326,7 @@ if taf_text.strip():
                         status_text = "霾"
 
                 vis_text = "CAVOK" if weather.cavok else f"{weather.visibility}m"
-                weather_cn = [weather_code_to_cn(w) for w in display_weather]
+                weather_cn = [weather_code_to_cn(w) for w in display_weather_list]
 
                 # 处理时区显示
                 utc_str = current_time.strftime("%H:%M")
