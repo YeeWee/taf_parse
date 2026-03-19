@@ -1196,9 +1196,6 @@ def _get_worse_weather(base: WeatherState, change: WeatherState) -> WeatherState
             if change.wind.variable:
                 worst.wind.variable = True
                 worst.wind.direction = None  # VRB 时清空具体风向
-            elif change.wind.direction and worst.wind.direction:
-                if change.wind.direction != worst.wind.direction:
-                    worst.wind.variable = True
             elif change.wind.direction and worst.wind.direction is None:
                 worst.wind.direction = change.wind.direction
 
