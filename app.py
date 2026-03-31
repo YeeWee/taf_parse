@@ -225,16 +225,6 @@ if taf_text.strip():
 
         time_labels = [h.strftime("%m-%d %H:00") for h in hours]
 
-        # 显示查询时间选择器
-        st.subheader("🕐 查询时间")
-        selected_time_label = st.selectbox(
-            "选择时间",
-            time_labels,
-            index=0,
-        )
-        # 根据选中的标签找到对应的时间
-        query_time = hours[time_labels.index(selected_time_label)]
-
         # 显示解析的基本信息
         st.divider()
         st.subheader("📊 解析结果")
@@ -247,7 +237,7 @@ if taf_text.strip():
 
         st.write(f"**变化组数量**: {len(taf.changes)}")
 
-        # 显示时间线
+        # 显示时间线 - 放在报文输入框后
         if show_timeline:
             st.divider()
             st.subheader("📈 每小时天气趋势")
@@ -466,6 +456,17 @@ if taf_text.strip():
                 use_container_width=True,
                 hide_index=True,
             )
+
+        # 显示查询时间选择器 - 放在每小时天气趋势后
+        st.divider()
+        st.subheader("🕐 查询时间")
+        selected_time_label = st.selectbox(
+            "选择时间",
+            time_labels,
+            index=0,
+        )
+        # 根据选中的标签找到对应的时间
+        query_time = hours[time_labels.index(selected_time_label)]
 
         # 显示查询时间的天气
         st.divider()
