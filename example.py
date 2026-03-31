@@ -123,13 +123,13 @@ def parse_example(taf_name, taf_text):
             time_range = f" ({ch.from_time.strftime('%H:%M')}-{ch.to_time.strftime('%H:%M')})"
         print(f"    [{i+1}] {ch_type}{time_range}")
 
-    # 测试不同时间
+    # 测试不同时间（有效期是左闭右开区间 [valid_from, valid_to)，不含结束时刻）
     print("\n每小时天气 (部分时段):")
     print("-"*70)
 
     query_time = taf.valid_from
     count = 0
-    while query_time <= taf.valid_to and count < 12:  # 显示前 12 小时
+    while query_time < taf.valid_to and count < 12:  # 显示前 12 小时
         weather_display = get_weather_display_at_time(taf, query_time)
         time_str = query_time.strftime("%H:%M")
         print(f"\n{time_str}:")

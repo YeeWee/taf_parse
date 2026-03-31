@@ -39,7 +39,7 @@ print("=" * 60)
 from datetime import timedelta
 
 current = taf.valid_from
-while current <= taf.valid_to:
+while current < taf.valid_to:
     display = get_weather_display_at_time(taf, current)
 
     if display.tempo_groups:

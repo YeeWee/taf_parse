@@ -216,10 +216,10 @@ if taf_text.strip():
     try:
         taf = parse_taf(taf_text)
 
-        # 计算有效期内的小时
+        # 计算有效期内的小时（左闭右开区间 [valid_from, valid_to)，不含结束时刻）
         hours = []
         current = taf.valid_from
-        while current <= taf.valid_to:
+        while current < taf.valid_to:
             hours.append(current)
             current += timedelta(hours=1)
 
@@ -268,10 +268,10 @@ if taf_text.strip():
                 </style>
             """, unsafe_allow_html=True)
 
-            # 创建每小时时间线数据
+            # 创建每小时时间线数据（有效期是左闭右开区间 [valid_from, valid_to)，不含结束时刻）
             timeline_data = []
             current_time = taf.valid_from
-            while current_time <= taf.valid_to:
+            while current_time < taf.valid_to:
                 weather_display = get_weather_display_at_time(taf, current_time)
                 weather = weather_display.main
 

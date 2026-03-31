@@ -819,10 +819,12 @@ def get_weather_display_at_time(taf: TAF, query_time: datetime) -> TAFDisplay:
     Raises:
         ValueError: 当查询时间不在 TAF 有效期内时
     """
-    if query_time < taf.valid_from or query_time > taf.valid_to:
+    # 有效期是左闭右开区间 [valid_from, valid_to)，不包含 valid_to 时刻
+    # 例如 1506/1612 表示 15 日 06:00 到 16 日 11:59，不包含 16 日 12:00
+    if query_time < taf.valid_from or query_time >= taf.valid_to:
         raise ValueError(
             f"查询时间 {query_time} 不在 TAF 有效期内 "
-            f"({taf.valid_from} 至 {taf.valid_to})"
+            f"({taf.valid_from} 至 {taf.valid_to}，不含结束时刻)"
         )
 
     # 从初始天气开始
