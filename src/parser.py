@@ -1241,13 +1241,16 @@ def _get_worse_weather(base: WeatherState, change: WeatherState) -> WeatherState
             # 否则保留 base 的云
 
     # 天气现象：处理 NSW 和合并
-    if 'NSW' in change.weather:
-        # NSW 表示无重要天气，清除所有天气现象
-        worst.weather = []
-    elif change.weather:
-        # 合并天气现象并按严重程度排序
-        all_weather = worst.weather + change.weather
-        worst.weather = _merge_weather_phenomena(all_weather)
+    # 注意：在 BECMG 期间取较差值时，NSW 表示天气好转，不应清除原有天气
+    # 较差值逻辑：保留对航空更不利的天气状况
+    if change.weather:
+        # 过滤掉 NSW，因为 NSW 表示好转，不是变差
+        change_weather_without_nsw = [w for w in change.weather if w != 'NSW']
+        if change_weather_without_nsw:
+            # 合并天气现象并按严重程度排序
+            all_weather = worst.weather + change_weather_without_nsw
+            worst.weather = _merge_weather_phenomena(all_weather)
+        # 如果 change 中只有 NSW，保留 worst 原有天气（原有天气更差）
 
     return worst
 
