@@ -1176,8 +1176,13 @@ def _get_worse_weather(base: WeatherState, change: WeatherState) -> WeatherState
     worst = deepcopy(base)
 
     # 能见度：取较小值（更差）
+    # 如果 base 是 CAVOK（能见度视为 10000 米），change 能见度更差时，清除 CAVOK 标志
     if change.visibility is not None:
-        if worst.visibility is None or change.visibility < worst.visibility:
+        if worst.cavok:
+            # base 是 CAVOK，change 能见度更差，清除 CAVOK 并采用 change 的能见度
+            worst.cavok = False
+            worst.visibility = change.visibility
+        elif worst.visibility is None or change.visibility < worst.visibility:
             worst.visibility = change.visibility
 
     # CAVOK：如果变化是 CAVOK，表示天气良好，不是变差
@@ -1202,7 +1207,13 @@ def _get_worse_weather(base: WeatherState, change: WeatherState) -> WeatherState
                 worst.wind.direction = change.wind.direction
 
     # 云底高：取较低值（更差）
+    # 如果 base 是 CAVOK，change 有云（非 NSC）时，清除 CAVOK 标志
     if change.clouds:
+        # NSC（无重要云）不破坏 CAVOK，其他云况会
+        has_non_nsc_clouds = any(cloud.amount != 'NSC' for cloud in change.clouds)
+        if worst.cavok and has_non_nsc_clouds:
+            worst.cavok = False
+
         # 找到 change 中最低的云
         lowest_change_cloud = None
         lowest_change_height = None
@@ -1249,6 +1260,9 @@ def _get_worse_weather(base: WeatherState, change: WeatherState) -> WeatherState
         # 过滤掉 NSW，因为 NSW 表示好转，不是变差
         change_weather_without_nsw = [w for w in change.weather if w != 'NSW']
         if change_weather_without_nsw:
+            # 如果 base 是 CAVOK，有天气现象时清除 CAVOK 标志
+            if worst.cavok:
+                worst.cavok = False
             # 合并天气现象并按严重程度排序
             all_weather = worst.weather + change_weather_without_nsw
             worst.weather = _merge_weather_phenomena(all_weather)
