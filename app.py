@@ -216,6 +216,9 @@ if taf_text.strip():
     try:
         taf = parse_taf(taf_text)
 
+        # 显示成功提示
+        st.toast(f"✅ 解析成功！{taf.icao} 机场，{len(taf.changes)} 个变化组", icon="✅")
+
         # 计算有效期内的小时（左闭右开区间 [valid_from, valid_to)，不含结束时刻）
         hours = []
         current = taf.valid_from
@@ -526,7 +529,19 @@ if taf_text.strip():
         st.exception(e)
 
 else:
-    st.info("👆 请输入或选择一个 TAF 报文")
+    # 空状态设计 - 欢迎界面
+    st.markdown("""
+    <div style='text-align: center; padding: 2rem 0;'>
+        <h2 style='margin-bottom: 0.5rem;'>🌤️ 欢迎使用 TAF 机场天气预报解析器</h2>
+        <p style='color: #666; margin-bottom: 1.5rem;'>
+            输入 TAF 报文，选择查询时间，获取对应天气状况
+        </p>
+        <div style='background: #f0f2f6; padding: 1rem; border-radius: 8px; margin: 1rem 0;'>
+            <strong>📋 3 步开始：</strong><br>
+            1️⃣ 选择示例或粘贴报文 → 2️⃣ 浏览天气趋势 → 3️⃣ 选择时间查详情
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # 页脚
