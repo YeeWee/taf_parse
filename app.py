@@ -520,7 +520,7 @@ if taf_text.strip():
             st.divider()
             st.subheader("🔧 原始数据")
             with st.expander("查看完整数据"):
-                st.json(weather.model_dump(mode='json'))
+                st.json(taf.model_dump(mode='json'))
 
     except TAFParseError as e:
         st.error(f"❌ 解析错误: {e}")
