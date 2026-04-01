@@ -265,37 +265,11 @@ if taf_text.strip():
                 weather_display = get_weather_display_at_time(taf, current_time)
                 weather = weather_display.main
 
-                # 状态图标和文字描述
+                # 状态图标和文字描述（仅基于主体天气，不受 TEMPO 影响）
                 status_icon = "☀️" if weather.cavok else "🌤️"
                 status_text = "CAVOK" if weather.cavok else "一般"
 
-                # 确定用于显示的天气列表（优先使用 TEMPO 最坏情况，如果主体天气为空）
-                display_weather_list = weather.weather
-                if weather_display.tempo and weather_display.tempo.weather:
-                    # 如果 TEMPO 有更严重的天气，使用 TEMPO 的天气来判断状态
-                    tempo_wx = weather_display.tempo.weather
-                    if "TS" in str(tempo_wx):
-                        status_icon = "⛈️"
-                        status_text = "雷暴"
-                    elif "RA" in str(tempo_wx):
-                        status_icon = "🌧️"
-                        status_text = "降雨"
-                    elif "SN" in str(tempo_wx) or "SHSN" in str(tempo_wx):
-                        status_icon = "🌨️"
-                        status_text = "降雪"
-                    elif "BR" in str(tempo_wx) or "FG" in str(tempo_wx):
-                        status_icon = "🌫️"
-                        status_text = "雾/轻雾"
-                    elif "SA" in str(tempo_wx) or "SS" in str(tempo_wx) or "DS" in str(tempo_wx):
-                        status_icon = "🌪️"
-                        status_text = "沙尘"
-                    elif "HZ" in str(tempo_wx):
-                        status_icon = "🌫️"
-                        status_text = "霾"
-                    # 当主体天气为空但 TEMPO 有天气时，使用 TEMPO 天气显示
-                    if not display_weather_list:
-                        display_weather_list = tempo_wx
-                elif weather.weather:
+                if weather.weather:
                     if "TS" in str(weather.weather):
                         status_icon = "⛈️"
                         status_text = "雷暴"
@@ -314,6 +288,9 @@ if taf_text.strip():
                     elif "HZ" in str(weather.weather):
                         status_icon = "🌫️"
                         status_text = "霾"
+
+                # 主体天气显示列表（仅使用主体天气，不受 TEMPO 影响）
+                display_weather_list = weather.weather
 
                 vis_text = "CAVOK" if weather.cavok else f"{weather.visibility}m"
                 weather_cn = [weather_code_to_cn(w) for w in display_weather_list]
